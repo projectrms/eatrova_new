@@ -6,7 +6,7 @@ import Swal from "sweetalert2";
 import "../styles/WaiterDashboard.css";
 import WaiterNavbar from "../components/WaiterNavbar";
 import ScrollToTopButton from "../components/ScrollToTopButton";
-
+import { API } from "../api/constants"; 
 export default function WaiterDashboard() {
 
   const navigate = useNavigate();
@@ -35,8 +35,10 @@ export default function WaiterDashboard() {
     fetchOrders();
 
     if (!socketRef.current) {
-      socketRef.current = io("http://127.0.0.1:5000");
-    }
+    socketRef.current = io(
+      import.meta.env.VITE_API_URL || "http://127.0.0.1:5000"
+    );
+  }
 
     socketRef.current.emit("join", { room: "waiter" });
 
@@ -52,7 +54,7 @@ export default function WaiterDashboard() {
   const fetchOrders = async () => {
     try {
 
-      const res = await fetch("http://127.0.0.1:5000/waiter/orders");
+      const res = await fetch(`${API}/waiter/orders`);
       const data = await res.json();
 
       const cleaned = data.map(o => ({
@@ -72,7 +74,7 @@ export default function WaiterDashboard() {
 
     try {
 
-      const res = await fetch(`http://127.0.0.1:5000/order/${id}/serve`, {
+      const res = await fetch(`${API}/order/${id}/serve`, {
         method: "PUT"
       });
 

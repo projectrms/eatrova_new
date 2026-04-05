@@ -10,6 +10,7 @@ import OrderFilters from "../components/OrderFilters";
 import OwnerNavbar from "../components/OwnerNavbar";
 import { useNavigate } from "react-router-dom";
 import CustomerPurchaseChart from "../components/CustomerPurchaseChart";
+import { API } from "../api/constants"; 
 import {
   BarChart,
   Bar,
@@ -44,7 +45,7 @@ import axios from "axios";
  */
 
 // NOTE: socket URL kept as local; if you deploy, change to env variable.
-const SOCKET_URL = "http://127.0.0.1:5000";
+const SOCKET_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
 
 export default function OwnerDashboard() {
   const { orders: ctxOrders, menuItems: ctxMenu } = useRestaurant();
@@ -116,7 +117,7 @@ const fetchRevenue = async (selectedRange = "week") => {
   setRange(selectedRange);
   try {
     const res = await fetch(
-      `http://127.0.0.1:5000/owner/analytics/revenue?range=${selectedRange}`
+      `${API}/owner/analytics/revenue?range=${selectedRange}`
     );
     const data = await res.json();
 
@@ -204,11 +205,11 @@ function detectDelayedOrders(orderList) {
 
   const loadCustomerAnalytics = async () => {
       try {
-        const f = await fetch("http://127.0.0.1:5000/analytics/customer/frequent");
-        const h = await fetch("http://127.0.0.1:5000/analytics/customer/highest");
-        const t = await fetch("http://127.0.0.1:5000/analytics/customer/today");
-        const u = await fetch("http://127.0.0.1:5000/analytics/customer/unpaid");
-        const ph = await fetch("http://127.0.0.1:5000/analytics/customer/history");
+        const f = await fetch(`${API}/analytics/customer/frequent`);
+        const h = await fetch(`${API}/analytics/customer/highest`);
+        const t = await fetch(`${API}/analytics/customer/today`);
+        const u = await fetch(`${API}/analytics/customer/unpaid`);
+        const ph = await fetch(`${API}/analytics/customer/history`);
 
         const frequent = await f.json();
         const highest = await h.json();
@@ -235,7 +236,7 @@ function detectDelayedOrders(orderList) {
 
 
     useEffect(() => {
-      fetch("http://127.0.0.1:5000/analytics/customer/full")
+      fetch(`${API}/analytics/customer/full`)
         .then((res) => res.json())
         .then((data) => {
           setCustomerHistory(data.purchase_history);
@@ -244,13 +245,13 @@ function detectDelayedOrders(orderList) {
 
     
   const loadExpenses = async () => {
-    const res = await fetch("http://127.0.0.1:5000/expenses");
+    const res = await fetch(`${API}/expenses`);
     const data = await res.json();
     if (data.success) setExpenses(data.expenses);
   };
 
   const loadExpenseSummary = async () => {
-    const res = await fetch("http://127.0.0.1:5000/expenses/summary");
+    const res = await fetch(`${API}/expenses/summary`);
     const data = await res.json();
     if (data.success) setSummary(data);
   };
@@ -261,7 +262,7 @@ function detectDelayedOrders(orderList) {
   }, []);
 
   const addExpense = async () => {
-    await fetch("http://127.0.0.1:5000/expenses/add", {
+    await fetch(`${API}/expenses/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(newExpense)
@@ -273,7 +274,7 @@ function detectDelayedOrders(orderList) {
   };
 
   const deleteExpense = async (id) => {
-    await fetch(`http://127.0.0.1:5000/expenses/delete/${id}`, {
+    await fetch(`${API}/expenses/delete/${id}`, {
       method: "DELETE"
     });
 
@@ -316,7 +317,7 @@ function detectDelayedOrders(orderList) {
   // ---------- Inventory handlers ----------
   const loadInventory = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/inventory");
+      const data = await safeFetchJson(`${API}/inventory`);
       setInventory(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("loadInventory:", e);
@@ -327,7 +328,7 @@ function detectDelayedOrders(orderList) {
 
   const loadLowStock = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/inventory/low");
+      const data = await safeFetchJson(`${API}/inventory/low`);
       setLowStock(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("loadLowStock:", e);
@@ -343,7 +344,7 @@ function detectDelayedOrders(orderList) {
   const deleteItem = async (id) => {
     if (!window.confirm("Are you sure? This action cannot be undone.")) return;
     try {
-      await safeFetchJson(`http://127.0.0.1:5000/inventory/${id}`, { method: "DELETE" });
+      await safeFetchJson(`${API}/inventory/${id}`, { method: "DELETE" });
       await Promise.all([loadInventory(), loadLowStock()]);
       toast("Item deleted", "success");
     } catch (e) {
@@ -364,7 +365,7 @@ function detectDelayedOrders(orderList) {
 
   const addItem = async () => {
     try {
-      await safeFetchJson("http://127.0.0.1:5000/inventory", {
+      await safeFetchJson(`${API}/inventory`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newItem || {})
@@ -380,7 +381,7 @@ function detectDelayedOrders(orderList) {
   const updateItem = async () => {
     if (!editItem || !editItem.id) return;
     try {
-      await safeFetchJson(`http://127.0.0.1:5000/inventory/${editItem.id}`, {
+      await safeFetchJson(`${API}/inventory/${editItem.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quantity: editItem.quantity, note: editItem.note })
@@ -414,7 +415,7 @@ function detectDelayedOrders(orderList) {
 
   const loadTables = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/tables");
+      const data = await safeFetchJson(`${API}/analytics/tables`);
       setTables(Array.isArray(data) ? data : []);
     } catch (e) {
       setTables([]);
@@ -423,7 +424,7 @@ function detectDelayedOrders(orderList) {
 
   const loadWeekly = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/weekly");
+      const data = await safeFetchJson(`${API}/analytics/weekly`);
       setWeekly(Array.isArray(data) ? data : []);
     } catch (e) {
       setWeekly([]);
@@ -432,7 +433,7 @@ function detectDelayedOrders(orderList) {
 
   const loadWorkload = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/workload");
+      const data = await safeFetchJson(`${API}/analytics/workload`);
       setWorkload(data || { chef_workload: 0, waiter_workload: 0 });
     } catch (e) {
       setWorkload({ chef_workload: 0, waiter_workload: 0 });
@@ -441,7 +442,7 @@ function detectDelayedOrders(orderList) {
 
   const loadAttendance = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/staff_attendance");
+      const data = await safeFetchJson(`${API}/analytics/staff_attendance`);
       setAttendance(data || attendance);
     } catch (e) {
       console.error(e);
@@ -450,7 +451,7 @@ function detectDelayedOrders(orderList) {
 
   const loadStaffAnalytics = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/staff");
+      const data = await safeFetchJson(`${API}/analytics/staff`);
       setStaffData(data || staffData);
     } catch (e) {
       console.error(e);
@@ -466,15 +467,15 @@ function detectDelayedOrders(orderList) {
   }, []);
 
   useEffect(() => {
-  fetch("http://127.0.0.1:5000/owner/analytics/summary")
+  fetch(`${API}/owner/analytics/summary`)
     .then(res => res.json())
     .then(setSummary);
 
-  fetch("http://127.0.0.1:5000/owner/analytics/weekly-revenue")
+  fetch(`${API}/owner/analytics/weekly-revenue`)
     .then(res => res.json())
     .then(setWeeklyRevenue);
 
-  fetch("http://127.0.0.1:5000/owner/analytics/category-revenue")
+  fetch(`${API}/owner/analytics/category-revenue`)
     .then(res => res.json())
     .then(setCategoryRevenue);
 }, []);
@@ -488,7 +489,7 @@ function detectDelayedOrders(orderList) {
       if (customerFilter) params.append("customer", customerFilter);
       if (dateFilter) params.append("date", dateFilter);
       if (orderIdSearch) params.append("order_id", orderIdSearch);
-      const data = await safeFetchJson(`http://127.0.0.1:5000/orders/filter?${params.toString()}`);
+      const data = await safeFetchJson(`${API}/orders/filter?${params.toString()}`);
       setAllOrders(Array.isArray(data) ? data : []);
     } catch (e) {
       Swal.fire("Error", e.message || "Filter failed", "error");
@@ -498,7 +499,7 @@ function detectDelayedOrders(orderList) {
   // fetch all manager orders
   const fetchAllOrders = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/manager/orders");
+      const data = await safeFetchJson(`${API}/manager/orders`);
       setAllOrders(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("All orders load error", e);
@@ -519,11 +520,11 @@ function detectDelayedOrders(orderList) {
         tableRes,
         allOrdersRes
       ] = await Promise.allSettled([
-        safeFetchJson("http://127.0.0.1:5000/owner/sales?range=daily"),
-        safeFetchJson("http://127.0.0.1:5000/owner/inventory"),
-        safeFetchJson("http://127.0.0.1:5000/owner/staff/performance"),
-        safeFetchJson("http://127.0.0.1:5000/owner/table-status"),
-        safeFetchJson("http://127.0.0.1:5000/owner/orders/all")
+        safeFetchJson(`${API}/owner/sales?range=daily`),
+        safeFetchJson(`${API}/owner/inventory`),
+        safeFetchJson(`${API}/owner/staff/performance`),
+        safeFetchJson(`${API}/owner/table-status`),
+        safeFetchJson(`${API}/owner/orders/all`)
       ]);
 
       if (salesRes.status === "fulfilled")
@@ -679,7 +680,7 @@ useEffect(() => {
   // ---------- small helpers + fetchers ----------
   const fetchMenu = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/manager/menu");
+      const data = await safeFetchJson(`${API}/manager/menu`);
       setLiveMenu(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("fetchMenu", e);
@@ -690,7 +691,7 @@ useEffect(() => {
     if (!itemId) return;
     setTogglingMenuId(itemId);
     try {
-      const res = await fetch(`http://127.0.0.1:5000/owner/menu/${itemId}/toggle`, {
+      const res = await fetch(`${API}/owner/menu/${itemId}/toggle`, {
         method: "PATCH",
         mode: "cors"
       });
@@ -717,7 +718,7 @@ useEffect(() => {
 
   const fetchOrderItems = async (orderId) => {
     try {
-      return await safeFetchJson(`http://127.0.0.1:5000/owner/order-items/${orderId}`) || [];
+      return await safeFetchJson(`${API}/owner/order-items/${orderId}`) || [];
     } catch (e) {
       return [];
     }
@@ -725,7 +726,7 @@ useEffect(() => {
 
   const loadLiveOrders = async () => {
     try {
-      const rawOrders = await safeFetchJson("http://127.0.0.1:5000/owner/live-orders");
+      const rawOrders = await safeFetchJson(`${API}/owner/live-orders`);
       if (!Array.isArray(rawOrders)) {
         setLiveOrders([]);
         return;
@@ -742,7 +743,7 @@ useEffect(() => {
 
   const fetchOrders = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/manager/orders");
+      const data = await safeFetchJson(`${API}/manager/orders`);
       if (!Array.isArray(data)) return;
       const normalized = data.map((o) => ({
         id: o.id,
@@ -766,7 +767,7 @@ useEffect(() => {
 
   const fetchStaff = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/owner/staff");
+      const data = await safeFetchJson(`${API}/owner/staff`);
       const normalized = (Array.isArray(data) ? data : []).map((s) => ({
         id: s.id,
         name: s.name,
@@ -783,7 +784,7 @@ useEffect(() => {
 
   const fetchRestaurantStatus = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/restaurant/status");
+      const j = await safeFetchJson(`${API}/owner/restaurant/status`);
       setRestaurantOpen(Boolean(j?.open));
     } catch (e) {
       // ignore
@@ -793,43 +794,43 @@ useEffect(() => {
   // smaller report fetchers
   const fetchDailyReport = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/report/daily");
+      const j = await safeFetchJson(`${API}/owner/report/daily`);
       setDailyReport(Array.isArray(j) ? j.map(r => ({ day: r.day, total: Number(r.total || 0) })) : []);
     } catch (e) {}
   };
   const fetchMonthlyReport = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/report/monthly");
+      const j = await safeFetchJson(`${API}/owner/report/monthly`);
       setMonthlyReport(Array.isArray(j) ? j : []);
     } catch (e) {}
   };
   const fetchTopCustomer = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/top-customer");
+      const j = await safeFetchJson(`${API}/owner/top-customer`);
       setTopCustomer(j || { name: "N/A", spent: 0 });
     } catch (e) {}
   };
   const fetchTopCategory = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/top-category");
+      const j = await safeFetchJson(`${API}/owner/top-category`);
       setTopCategory(j || { category: "N/A", revenue: 0 });
     } catch (e) {}
   };
   const fetchTopTable = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/top-table");
+      const j = await safeFetchJson(`${API}/owner/top-table`);
       setTopTable(j || { table: "N/A", orders: 0 });
     } catch (e) {}
   };
   const fetchPeakHour = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/peak-hour");
+      const j = await safeFetchJson(`${API}/owner/peak-hour`);
       setPeakHour(j || { hour: "N/A", orders: 0 });
     } catch (e) {}
   };
   const fetchProfit = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/profit");
+      const j = await safeFetchJson(`${API}/owner/profit`);
       setProfit(j || { revenue: 0, profit: 0 });
     } catch (e) {}
   };
@@ -837,7 +838,7 @@ useEffect(() => {
   // owner actions
   const toggleRestaurant = async () => {
     try {
-      const j = await safeFetchJson("http://127.0.0.1:5000/owner/restaurant/toggle", { method: "PATCH" });
+      const j = await safeFetchJson(`${API}/owner/restaurant/toggle`, { method: "PATCH" });
       setRestaurantOpen(Boolean(j.open));
       toast(j.open ? "Restaurant opened" : "Restaurant closed", "success");
     } catch (e) {
@@ -847,7 +848,7 @@ useEffect(() => {
 
   const toggleStaff = async (role, id) => {
     try {
-      const d = await safeFetchJson(`http://127.0.0.1:5000/owner/staff/${role}/${id}/toggle`, { method: "PATCH" });
+      const d = await safeFetchJson(`${API}/owner/staff/${role}/${id}/toggle`, { method: "PATCH" });
       toast("Staff updated", "success");
       fetchStaff();
     } catch (e) {
@@ -873,7 +874,7 @@ useEffect(() => {
       return;
     }
     try {
-      const res = await fetch(`http://127.0.0.1:5000/owner/staff/${staffForm.role}`, {
+      const res = await fetch(`${API}/owner/staff/${staffForm.role}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -899,7 +900,7 @@ useEffect(() => {
     const c = await Swal.fire({ title: "Delete item permanently?", icon: "warning", showCancelButton: true });
     if (!c.isConfirmed) return;
     try {
-      await safeFetchJson(`http://127.0.0.1:5000/owner/menu/${id}`, { method: "DELETE" });
+      await safeFetchJson(`${API}/owner/menu/${id}`, { method: "DELETE" });
       toast("Item deleted", "success");
       setLiveMenu((prev) => prev.filter(i => i.id !== id));
     } catch (e) {
@@ -916,7 +917,7 @@ useEffect(() => {
     });
     if (reason === undefined) return;
     try {
-      const res = await fetch(`http://127.0.0.1:5000/owner/order/${orderId}/block`, {
+      const res = await fetch(`${API}/owner/order/${orderId}/block`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason || "Blocked by owner" })
@@ -979,7 +980,7 @@ useEffect(() => {
 
   const loadAnalytics = async () => {
     try {
-      const data = await safeFetchJson("http://127.0.0.1:5000/analytics/orders/today");
+      const data = await safeFetchJson(`${API}/analytics/orders/today`);
 
       console.log("TODAY ANALYTICS:", data); // <-- ADD THIS
 

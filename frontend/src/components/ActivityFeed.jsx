@@ -15,7 +15,7 @@ export default function ActivityFeed() {
 
   // Load old logs from API
   useEffect(() => {
-    fetch("http://127.0.0.1:5000/logs")
+    fetch("`${API}/logs")
       .then(res => res.json())
       .then(data => setLogs(data));
   }, []);

@@ -1,12 +1,12 @@
-// src/utils/socket.js
 import { io } from "socket.io-client";
+import { API_BASE } from "../api/api";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://127.0.0.1:5000";
+const SOCKET_URL = API_BASE;
 
 // Single shared socket instance
 export const socket = io(SOCKET_URL, {
   transports: ["websocket", "polling"],
-  autoConnect: true, // ensure auto connection
+  autoConnect: true,
 });
 
 // Join the user's private room

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import io from "socket.io-client";
 import Swal from "sweetalert2";
 import ScrollToTopButton from "../components/ScrollToTopButton";
+import { API } from "../api/constants"; 
 import {
   Calendar,
   Tag,
@@ -30,7 +31,9 @@ import ManagerNavbar from "../components/ManagerNavbar";
 import Modal from "../components/Modal";
 import "../styles/ManagerDashboard.css"; // your css
 
-const socket = io("http://127.0.0.1:5000");
+const socket = io(
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:5000"
+);
 
 export default function ManagerDashboard({ onLogout }) {
   const [menuItems, setMenuItems] = useState([]);
@@ -59,20 +62,20 @@ export default function ManagerDashboard({ onLogout }) {
   // ---------------- LOAD DATA ----------------
 
   const loadMenu = async () => {
-    const res = await fetch("http://127.0.0.1:5000/manager/menu");
+    const res = await fetch(`${API}/manager/menu`);
     const data = await res.json();
     setMenuItems(data);
   };
 
   const loadOrders = async () => {
-    const res = await fetch("http://127.0.0.1:5000/manager/orders");
+    const res = await fetch(`${API}/manager/orders`);
     const data = await res.json();
     setOrders(data);
   };
 
   const loadDeletedItems = async () => {
     const res = await fetch(
-      "http://127.0.0.1:5000/manager/menu/deleted"
+      `${API}/manager/menu/deleted`
     );
     const data = await res.json();
     setDeletedItems(data);
@@ -139,8 +142,8 @@ export default function ManagerDashboard({ onLogout }) {
     }
 
     const url = editingItem
-      ? `http://127.0.0.1:5000/manager/menu/${editingItem.id}`
-      : "http://127.0.0.1:5000/manager/menu";
+      ? `${API}/manager/menu/${editingItem.id}`
+      : `${API}/manager/menu`;
 
     const method = editingItem ? "PUT" : "POST";
 
@@ -169,7 +172,7 @@ export default function ManagerDashboard({ onLogout }) {
 
   const deleteItem = async (id) => {
     await fetch(
-      `http://127.0.0.1:5000/manager/menu/${id}/delete`,
+      `${API}/manager/menu/${id}/delete`,
       { method: "POST" }
     );
 
@@ -187,7 +190,7 @@ export default function ManagerDashboard({ onLogout }) {
 
   const toggleAvailability = async (id) => {
   const res = await fetch(
-    `http://127.0.0.1:5000/manager/menu/${id}/toggle`,
+    `${API}/manager/menu/${id}/toggle`,
     { method: "POST" }
   );
 
@@ -227,13 +230,13 @@ export default function ManagerDashboard({ onLogout }) {
       imageFile: null
     });
     setImagePreview(
-    item.image ? `http://127.0.0.1:5000${item.image}` : null
+    item.image ? `${API}${item.image}` : null
   );
     setShowAddForm(true);
   };
 
   const restoreItem = async (id) => {
-    await fetch(`http://127.0.0.1:5000/manager/menu/${id}/restore`, {
+    await fetch(`${API}/manager/menu/${id}/restore`, {
       method: "PATCH",
     });
 
@@ -474,7 +477,7 @@ export default function ManagerDashboard({ onLogout }) {
                     <img
                       src={
                         item.image
-                          ? `http://127.0.0.1:5000${item.image}`
+                          ? `${API}${item.image}`
                           : "/no-image.png"
                       }
                       className="menu-img"
