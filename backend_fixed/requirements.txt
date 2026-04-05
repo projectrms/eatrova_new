@@ -7,3 +7,4 @@ stripe
 openpyxl
 reportlab
 werkzeug
+psycopg2-binary
