@@ -1,0 +1,9 @@
+Flask
+flask-cors
+flask-socketio
+eventlet
+gunicorn
+stripe
+openpyxl
+reportlab
+werkzeug
