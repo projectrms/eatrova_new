@@ -565,7 +565,7 @@ def place_order():
         items = data.get("items", [])
 
         if not user_id or not table_no or not items:
-            return jsonify({"success": False, "error": "Invalid request"}), 400
+            return jsonify({"success": False, "error": "Missing user_id, table_no, or items"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -574,14 +574,12 @@ def place_order():
         cur.execute("SELECT id, active FROM tables WHERE table_number = %s", (table_no,))
         table = cur.fetchone()
         if not table:
-            return jsonify({"success": False, "error": "Invalid table"}), 400
-
+            return jsonify({"success": False, "error": "Invalid table number"}), 400
         table_id = table["id"]
 
-        # 2️⃣ Check active session
+        # 2️⃣ Check active session or create new
         cur.execute("SELECT id FROM table_sessions WHERE table_no = %s AND status='active'", (table_no,))
         session = cur.fetchone()
-
         if session:
             session_id = session["id"]
         else:
@@ -592,15 +590,20 @@ def place_order():
             )
             session_id = cur.fetchone()["id"]
 
+            # Optional: mark table as inactive while session is active
             cur.execute("UPDATE tables SET active = 0 WHERE id = %s", (table_id,))
 
-        # 3️⃣ Calculate total
+        # 3️⃣ Calculate total safely
         total = 0
-        for i in items:
+        for item in items:
             try:
-                total += float(i.get("price", 0)) * int(i.get("quantity", 1))
+                quantity = int(item.get("quantity", 1))
+                price = float(item.get("price", 0))
+                if quantity < 1 or price < 0:
+                    raise ValueError("Invalid quantity or price")
+                total += price * quantity
             except Exception:
-                return jsonify({"success": False, "error": "Invalid price or quantity"}), 400
+                return jsonify({"success": False, "error": "Invalid price or quantity in items"}), 400
 
         created_at = datetime.now()
 
@@ -615,13 +618,19 @@ def place_order():
 
         # 5️⃣ Insert order items
         socket_items = []
-        for i in items:
-            menu_id = i.get("menu_id")
-            quantity = int(i.get("quantity", 1))
-            price = float(i.get("price", 0))
+        menu_ids = [i.get("menu_id") for i in items]
+        if menu_ids:
+            cur.execute(f"SELECT id, name, image, price FROM menu_items WHERE id = ANY(%s)", (menu_ids,))
+            menu_map = {m["id"]: m for m in cur.fetchall()}
+        else:
+            menu_map = {}
 
-            cur.execute("SELECT name, image, price FROM menu_items WHERE id = %s", (menu_id,))
-            menu = cur.fetchone()
+        for item in items:
+            menu_id = item.get("menu_id")
+            quantity = int(item.get("quantity", 1))
+            price = float(item.get("price", 0))
+
+            menu = menu_map.get(menu_id)
             if menu:
                 item_name = menu["name"]
                 item_image = menu.get("image") or ""
@@ -643,7 +652,7 @@ def place_order():
 
         conn.commit()
 
-        # 6️⃣ Realtime update
+        # 6️⃣ Emit real-time event to chef
         socketio.emit("order_created", {
             "order_id": order_id,
             "table_no": table_no,
