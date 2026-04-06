@@ -47,22 +47,23 @@ TAX_CONFIG = {
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# from dotenv import load_dotenv
-# load_dotenv()
+from dotenv import load_dotenv
+load_dotenv()
 # -------------------------
 # DB helpers
 # -------------------------
 import psycopg2
 from psycopg2.extras import RealDictCursor
-
-DATABASE_URL = os.getenv("DATABASE_URL")
+import os
 
 def get_db_connection():
     return psycopg2.connect(
-        DATABASE_URL,
+        dbname=os.getenv("DB_NAME"),          # e.g., "eatrova"
+        user=os.getenv("DB_USER"),            # e.g., "eatrova_user"
+        password=os.getenv("DB_PASSWORD"),    # your DB password
+        host=os.getenv("DB_HOST"),            # e.g., "dpg-d799q6ua2pns73938pe0-a.oregon-postgres.render.com"
         cursor_factory=RealDictCursor
     )
-
 
 def init_db():
     conn = get_db_connection()
@@ -164,7 +165,14 @@ def init_db():
 def seed_menu_items():
     conn = get_db_connection()
     cur = conn.cursor()
-    count = cur.execute("SELECT COUNT(*) FROM menu_items").fetchone()[0]
+
+    # Execute the query
+    cur.execute("SELECT COUNT(*) AS count FROM menu_items")
+    
+    # Fetch result as dict
+    row = cur.fetchone()
+    count = row['count']  # <-- access by key, not index
+
     if count == 0:
         items = [
             ("Margherita Pizza", "Classic cheese and tomato pizza", 299, "https://i.imgur.com/MK7wGkV.png"),
@@ -172,10 +180,15 @@ def seed_menu_items():
             ("Pasta Alfredo", "Creamy white sauce pasta", 249, "https://i.imgur.com/XU2vUeG.png"),
             ("Cold Coffee", "Iced coffee with cream", 149, "https://i.imgur.com/EVp5pGf.png"),
         ]
-        cur.executemany("INSERT INTO menu_items (name, description, price, image) VALUES (%s, %s, %s, %s)", items)
+        cur.executemany(
+            "INSERT INTO menu_items (name, description, price, image) VALUES (%s, %s, %s, %s)",
+            items
+        )
         conn.commit()
-    conn.close()
+        print("Menu items seeded successfully!")
 
+    cur.close()
+    conn.close()
 
 # ---------------------------
 # Helper functions for sockets
@@ -184,16 +197,23 @@ def seed_tables():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    count = cur.execute("SELECT COUNT(*) FROM tables").fetchone()[0]
+    # Use alias to make key access easy
+    cur.execute("SELECT COUNT(*) AS count FROM tables")
+    row = cur.fetchone()
+    count = row['count']  # access by key, not index
 
     if count == 0:
-        for i in range(1, 11):  # tables 1 to 10
-            cur.execute(
-                "INSERT INTO tables (table_number, active) VALUES (%s, 1)",
-                (i,)
-            )
+        tables = [
+            (1, 4),
+            (2, 4),
+            (3, 2),
+            (4, 6),
+        ]
+        cur.executemany("INSERT INTO tables (table_number, capacity) VALUES (%s, %s)", tables)
+        conn.commit()
+        print("Tables seeded successfully!")
 
-    conn.commit()
+    cur.close()
     conn.close()
 
 def get_unpaid_count(user_id):
@@ -517,9 +537,9 @@ def get_menu():
                         price,
                         image,
                         COALESCE(category, 'main') AS category,
-                        COALESCE(is_available, TRUE) AS is_available
+                        COALESCE(is_available, 1) AS is_available
                     FROM menu_items
-                    WHERE is_available = TRUE
+                    WHERE COALESCE(is_available, 1) = 1
                     ORDER BY id DESC
                 """)
                 rows = cur.fetchall()
@@ -3882,12 +3902,19 @@ if __name__ == "__main__":
     init_db()
 
     # ✅ Optional: run seeds only once (recommended)
-    if os.getenv("RUN_SEED", "false") == "true":
+    if os.getenv("RUN_SEED", "false").lower() == "true":
+        print("Seeding menu items and tables...")
         seed_menu_items()
         seed_tables()
+        print("Seeding completed.")
 
     # ✅ Get dynamic port from Render
     port = int(os.environ.get("PORT", 5000))
 
-    # ✅ Run server (IMPORTANT CHANGE)
+    # ✅ Run server with eventlet (important for SocketIO on Render)
+    import eventlet
+    import eventlet.wsgi
+    eventlet.monkey_patch()  # must be before imports like psycopg2
+
+    print(f"Starting server on port {port}...")
     socketio.run(app, host="0.0.0.0", port=port)
