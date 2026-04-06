@@ -1579,10 +1579,12 @@ def serve_order(order_id):
     
 @app.route("/manager/orders", methods=["GET"])
 def manager_all_orders():
+    import traceback
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)  # allows dict access
 
+        # Fetch all orders with customer name
         cur.execute("""
             SELECT 
                 o.id,
@@ -1593,7 +1595,7 @@ def manager_all_orders():
                 o.paid,
                 o.status,
                 o.created_at,
-                IFNULL(o.cancel_reason,'') AS cancel_reason
+                COALESCE(o.cancel_reason,'') AS cancel_reason
             FROM orders o
             LEFT JOIN customers c ON c.id = o.user_id
             ORDER BY o.created_at DESC
@@ -1603,39 +1605,43 @@ def manager_all_orders():
         result = []
 
         for o in orders:
+            # Fetch items for each order — use correct column names
             cur.execute("""
                 SELECT 
-                    item_name,
-                    item_image,
-                    quantity,
-                    price,
-                    (quantity * price) AS subtotal
-                FROM order_items
-                WHERE order_id = %s
+                    mi.name AS item_name,
+                    mi.image AS item_image,
+                    oi.quantity,
+                    oi.price,
+                    (oi.quantity * oi.price) AS subtotal
+                FROM order_items oi
+                JOIN menu_items mi ON oi.menu_id = mi.id
+                WHERE oi.order_id = %s
             """, (o["id"],))
 
-            items = [dict(i) for i in cur.fetchall()]
+            items = cur.fetchall()  # already dicts because of RealDictCursor
 
             result.append({
                 "id": o["id"],
                 "user_id": o["user_id"],
                 "customer_name": o["customer_name"],
                 "tableNumber": o["table_no"],
-                "totalAmount": o["total"],
+                "totalAmount": float(o["total"]),
                 "paid": bool(o["paid"]),
                 "status": o["status"],
-                "createdAt": o["created_at"],
+                "createdAt": o["created_at"].isoformat() if o["created_at"] else None,
                 "cancelReason": o["cancel_reason"],
                 "items": items
             })
 
-        conn.close()
         return jsonify(result), 200
 
     except Exception as e:
-        print("Manager orders error:", e)
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
 #--------------------------------------
 import uuid
 
