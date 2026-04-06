@@ -1681,6 +1681,7 @@ def manager_get_menu():
 def manager_add_menu():
     try:
         import uuid
+
         name = request.form.get("name")
         description = request.form.get("description", "")
         price = request.form.get("price")
@@ -1688,8 +1689,13 @@ def manager_add_menu():
 
         if not name or not price:
             return jsonify({"error": "Name & price required"}), 400
-        price = float(price)
 
+        try:
+            price = float(price)
+        except:
+            return jsonify({"error": "Price must be a number"}), 400
+
+        # Handle image
         file = request.files.get("image")
         image_path = ""
         if file and allowed_file(file.filename):
@@ -1699,6 +1705,7 @@ def manager_add_menu():
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
             image_path = f"/static/menu/{filename}"
 
+        # Insert into PostgreSQL
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -1708,12 +1715,17 @@ def manager_add_menu():
         """, (name, description, price, image_path, category))
         item_id = cur.fetchone()[0]
         conn.commit()
+        cur.close()
         conn.close()
 
+        # Emit SocketIO event
         socketio.emit("menu_changed", {"action": "created", "item_id": item_id}, broadcast=True)
+
         return jsonify({"id": item_id}), 201
+
     except Exception as e:
-        print("manager_add_menu error:", e)
+        import traceback
+        traceback.print_exc()  # this will show the real error in backend console
         return jsonify({"error": "Server error"}), 500
 
 # ---------------------------
