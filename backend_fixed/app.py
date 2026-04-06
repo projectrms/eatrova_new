@@ -506,7 +506,7 @@ def universal_login():
 def get_menu():
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT 
                         id,
@@ -515,9 +515,9 @@ def get_menu():
                         price,
                         image,
                         COALESCE(category, 'main') AS category,
-                        COALESCE(available, TRUE) AS is_available
+                        COALESCE(is_available, TRUE) AS is_available
                     FROM menu_items
-                    WHERE available = TRUE
+                    WHERE is_available = TRUE
                     ORDER BY id DESC
                 """)
                 rows = cur.fetchall()
