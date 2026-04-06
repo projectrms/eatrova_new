@@ -552,9 +552,14 @@ def get_menu():
 # ---------------------------
 @app.route("/orders", methods=["POST"])
 def place_order():
+    import traceback
+    from datetime import datetime
+
+    conn = None
+    cur = None
+
     try:
         data = request.get_json() or {}
-
         user_id = data.get("user_id") or data.get("userId")
         table_no = data.get("table_no") or data.get("tableNo")
         items = data.get("items", [])
@@ -563,128 +568,100 @@ def place_order():
             return jsonify({"success": False, "error": "Invalid request"}), 400
 
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # 1️⃣ Validate table
-        cur.execute("""
-            SELECT id, active FROM tables
-            WHERE table_number = %s
-        """, (table_no,))
+        cur.execute("SELECT id, active FROM tables WHERE table_number = %s", (table_no,))
         table = cur.fetchone()
-
         if not table:
-            cur.close()
-            conn.close()
             return jsonify({"success": False, "error": "Invalid table"}), 400
 
         table_id = table["id"]
 
-        # 2️⃣ Active session
-        cur.execute("""
-            SELECT id FROM table_sessions
-            WHERE table_no = %s AND status = 'active'
-        """, (table_no,))
+        # 2️⃣ Check active session
+        cur.execute("SELECT id FROM table_sessions WHERE table_no = %s AND status='active'", (table_no,))
         session = cur.fetchone()
 
         if session:
             session_id = session["id"]
         else:
             started_at = datetime.now()
-
-            cur.execute("""
-                INSERT INTO table_sessions (table_no, started_at, status)
-                VALUES (%s, %s, 'active')
-                RETURNING id
-            """, (table_no, started_at))
-
+            cur.execute(
+                "INSERT INTO table_sessions (table_no, started_at, status) VALUES (%s, %s, 'active') RETURNING id",
+                (table_no, started_at)
+            )
             session_id = cur.fetchone()["id"]
 
-            cur.execute("""
-                UPDATE tables SET active = 0 WHERE id = %s
-            """, (table_id,))
+            cur.execute("UPDATE tables SET active = 0 WHERE id = %s", (table_id,))
 
         # 3️⃣ Calculate total
-        total = sum(float(i["price"]) * int(i["quantity"]) for i in items)
+        total = 0
+        for i in items:
+            try:
+                total += float(i.get("price", 0)) * int(i.get("quantity", 1))
+            except Exception:
+                return jsonify({"success": False, "error": "Invalid price or quantity"}), 400
+
         created_at = datetime.now()
 
-        # 4️⃣ Create order
+        # 4️⃣ Insert order
         cur.execute("""
             INSERT INTO orders
             (user_id, table_id, table_no, session_id, total, paid, status, created_at)
             VALUES (%s, %s, %s, %s, %s, 0, 'pending', %s)
             RETURNING id
         """, (user_id, table_id, table_no, session_id, total, created_at))
-
         order_id = cur.fetchone()["id"]
 
-        # 5️⃣ Snapshot items
+        # 5️⃣ Insert order items
         socket_items = []
-
         for i in items:
-            cur.execute("""
-                SELECT name, image, price
-                FROM menu_items
-                WHERE id = %s
-            """, (i["menu_id"],))
+            menu_id = i.get("menu_id")
+            quantity = int(i.get("quantity", 1))
+            price = float(i.get("price", 0))
 
+            cur.execute("SELECT name, image, price FROM menu_items WHERE id = %s", (menu_id,))
             menu = cur.fetchone()
-
             if menu:
                 item_name = menu["name"]
-                item_image = menu["image"] or ""
-                price = menu["price"]
+                item_image = menu.get("image") or ""
+                price = menu.get("price", price)
             else:
                 item_name = "Deleted Item"
                 item_image = ""
-                price = float(i["price"])
 
             cur.execute("""
-                INSERT INTO order_items
-                (order_id, menu_id, item_name, item_image, quantity, price)
+                INSERT INTO order_items (order_id, menu_id, item_name, item_image, quantity, price)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                order_id,
-                i["menu_id"],
-                item_name,
-                item_image,
-                i["quantity"],
-                price
-            ))
+            """, (order_id, menu_id, item_name, item_image, quantity, price))
 
             socket_items.append({
                 "name": item_name,
-                "quantity": i["quantity"],
+                "quantity": quantity,
                 "price": price
             })
 
         conn.commit()
-        cur.close()
-        conn.close()
 
         # 6️⃣ Realtime update
-        socketio.emit(
-            "order_created",
-            {
-                "order_id": order_id,
-                "table_no": table_no,
-                "session_id": session_id,
-                "status": "pending",
-                "items": socket_items
-            },
-            room="chef"
-        )
+        socketio.emit("order_created", {
+            "order_id": order_id,
+            "table_no": table_no,
+            "session_id": session_id,
+            "status": "pending",
+            "items": socket_items
+        }, room="chef")
 
-        return jsonify({
-            "success": True,
-            "orderId": order_id,
-            "sessionId": session_id
-        }), 201
+        return jsonify({"success": True, "orderId": order_id, "sessionId": session_id}), 201
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+        
 @app.route("/order/summary", methods=["POST"])
 def order_summary():
     data = request.json
