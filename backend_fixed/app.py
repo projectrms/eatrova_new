@@ -61,6 +61,7 @@ def get_db_connection():
         cursor_factory=RealDictCursor
     )
 
+
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -504,28 +505,25 @@ def universal_login():
 @app.route("/menu", methods=["GET"])
 def get_menu():
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        id,
+                        name,
+                        description,
+                        price,
+                        image,
+                        COALESCE(category, 'main') AS category,
+                        COALESCE(is_available, TRUE) AS is_available
+                    FROM menu_items
+                    WHERE is_available = TRUE
+                      AND is_deleted = FALSE
+                    ORDER BY id DESC
+                """)
+                rows = cur.fetchall()
 
-        cur.execute("""
-            SELECT 
-                id,
-                name,
-                description,
-                price,
-                image,
-                IFNULL(category, 'main') AS category,
-                IFNULL(is_available, 1) AS is_available
-            FROM menu_items
-            WHERE is_available = 1
-              AND is_deleted = 0
-            ORDER BY id DESC
-        """)
-
-        rows = cur.fetchall()
-        conn.close()
-
-        return jsonify([dict(r) for r in rows]), 200
+        return jsonify(rows), 200
 
     except Exception as e:
         print("Menu error:", e)
