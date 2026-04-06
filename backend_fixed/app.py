@@ -1574,7 +1574,8 @@ def serve_order(order_id):
             "success": False,
             "error": "Server error"
         }), 500
-    
+
+
 @app.route("/manager/orders", methods=["GET"])
 def manager_all_orders():
     import traceback
@@ -1680,53 +1681,45 @@ def manager_get_menu():
 @app.route("/manager/menu", methods=["POST"])
 def manager_add_menu():
     try:
-        import uuid
-
         name = request.form.get("name")
         description = request.form.get("description", "")
         price = request.form.get("price")
         category = request.form.get("category", "main")
 
-        if not name or not price:
-            return jsonify({"error": "Name & price required"}), 400
+        if not name or price is None:
+            return jsonify({"error":"Name & price required"}), 400
 
-        try:
-            price = float(price)
-        except:
-            return jsonify({"error": "Price must be a number"}), 400
-
-        # Handle image
-        file = request.files.get("image")
+        price = float(price)
         image_path = ""
+
+        file = request.files.get("image")
         if file and allowed_file(file.filename):
-            ext = file.filename.rsplit(".", 1)[1].lower()
+            ext = file.filename.rsplit(".",1)[1].lower()
             filename = f"{uuid.uuid4().hex}.{ext}"
             os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
             image_path = f"/static/menu/{filename}"
 
-        # Insert into PostgreSQL
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
         cur.execute("""
-            INSERT INTO menu_items (name, description, price, image, category, is_available)
+            INSERT INTO menu_items (name, description, price, image, category, available)
             VALUES (%s, %s, %s, %s, %s, TRUE)
             RETURNING id
         """, (name, description, price, image_path, category))
-        item_id = cur.fetchone()[0]
+
+        item_id = cur.fetchone()["id"]
         conn.commit()
-        cur.close()
         conn.close()
 
-        # Emit SocketIO event
-        socketio.emit("menu_changed", {"action": "created", "item_id": item_id}, broadcast=True)
+        socketio.emit("menu_changed", {"action":"created","item_id":item_id})
 
         return jsonify({"id": item_id}), 201
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()  # this will show the real error in backend console
-        return jsonify({"error": "Server error"}), 500
+        print("manager_add_menu error:", e)
+        return jsonify({"error":"Server error"}), 500
 
 # ---------------------------
 # Manager menu - DELETE
@@ -1735,15 +1728,16 @@ def manager_add_menu():
 def delete_menu_item(item_id):
     conn = get_db_connection()
     cur = conn.cursor()
+
     cur.execute("""
-        UPDATE menu_items
-        SET is_deleted = TRUE, is_available = FALSE, deleted_at = NOW()
+        DELETE FROM menu_items
         WHERE id = %s
     """, (item_id,))
+
     conn.commit()
     conn.close()
 
-    socketio.emit("menu_changed", {"action": "deleted", "item_id": item_id}, broadcast=True)
+    socketio.emit("menu_changed", {"action":"deleted","item_id":item_id})
     return jsonify({"success": True})
 
 # ---------------------------
@@ -1796,16 +1790,31 @@ def manager_update_menu(item_id):
 def toggle_menu_item(item_id):
     conn = get_db_connection()
     cur = conn.cursor()
+
     cur.execute("""
         UPDATE menu_items
-        SET is_available = NOT is_available
-        WHERE id = %s AND is_deleted = FALSE
+        SET is_available = CASE 
+            WHEN is_available = 1 THEN 0
+            ELSE 1
+        END
+        WHERE id = %s AND is_deleted = 0
     """, (item_id,))
+
     conn.commit()
-    cur.execute("SELECT is_available FROM menu_items WHERE id = %s", (item_id,))
-    available = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT is_available
+        FROM menu_items
+        WHERE id = %s
+    """, (item_id,))
+    row = cur.fetchone()
+
     conn.close()
-    return jsonify({"success": True, "available": available})
+
+    return jsonify({
+        "success": True,
+        "available": bool(row["is_available"])
+    })
 
 @app.route("/manager/menu/deleted", methods=["GET"])
 def get_deleted_menu():
@@ -1827,15 +1836,20 @@ def get_deleted_menu():
 def restore_menu_item(item_id):
     conn = get_db_connection()
     cur = conn.cursor()
+
     cur.execute("""
         UPDATE menu_items
-        SET is_deleted = FALSE, is_available = TRUE, deleted_at = NULL
+        SET is_deleted = 0,
+            is_available = 1,
+            deleted_at = NULL
         WHERE id = %s
     """, (item_id,))
+
     conn.commit()
     conn.close()
 
-    socketio.emit("menu_changed", {"action": "restored", "item_id": item_id}, broadcast=True)
+    socketio.emit("menu_changed", {"action":"restored","item_id":item_id})
+
     return jsonify({"success": True})
 
 # ----------------------------------------------
