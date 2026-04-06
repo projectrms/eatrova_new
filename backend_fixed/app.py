@@ -1656,23 +1656,24 @@ def allowed_file(filename):
 @app.route("/manager/menu", methods=["GET"])
 def manager_get_menu():
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
     cur.execute("""
         SELECT 
-            id, name, description, price, image,
-            IFNULL(category,'main') AS category,
-            is_available,
-            is_deleted,
-            deleted_at
+            id, 
+            name, 
+            description, 
+            price, 
+            image,
+            COALESCE(category,'main') AS category,
+            is_available
         FROM menu_items
         ORDER BY id DESC
     """)
 
     rows = cur.fetchall()
     conn.close()
-
-    return jsonify([dict(r) for r in rows]), 200
+    return jsonify(rows), 200
 
 # ---------------------------
 # Manager menu - CREATE
@@ -1682,9 +1683,9 @@ def manager_get_menu():
 def manager_add_menu():
     try:
         name = request.form.get("name")
-        description = request.form.get("description","")
+        description = request.form.get("description", "")
         price = request.form.get("price")
-        category = request.form.get("category","main")
+        category = request.form.get("category", "main")
 
         if not name or price is None:
             return jsonify({"error":"Name & price required"}), 400
@@ -1693,28 +1694,24 @@ def manager_add_menu():
         image_path = ""
 
         file = request.files.get("image")
-        if file and file.filename:
-            if not allowed_file(file.filename):
-                return jsonify({"error":"Invalid image type"}), 400
-
+        if file and allowed_file(file.filename):
             ext = file.filename.rsplit(".",1)[1].lower()
             filename = f"{uuid.uuid4().hex}.{ext}"
-
             os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
             image_path = f"/static/menu/{filename}"
 
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute("""
-            INSERT INTO menu_items
-            (name, description, price, image, category, is_available, is_deleted)
-            VALUES (%s, %s, %s, %s, %s, 1, 0)
+            INSERT INTO menu_items (name, description, price, image, category, available)
+            VALUES (%s, %s, %s, %s, %s, TRUE)
+            RETURNING id
         """, (name, description, price, image_path, category))
 
+        item_id = cur.fetchone()["id"]
         conn.commit()
-        item_id = cur.lastrowid
         conn.close()
 
         socketio.emit("menu_changed", {"action":"created","item_id":item_id})
@@ -1734,10 +1731,7 @@ def delete_menu_item(item_id):
     cur = conn.cursor()
 
     cur.execute("""
-        UPDATE menu_items
-        SET is_deleted = 1,
-            is_available = 0,
-            deleted_at = datetime('now')
+        DELETE FROM menu_items
         WHERE id = %s
     """, (item_id,))
 
@@ -1745,7 +1739,6 @@ def delete_menu_item(item_id):
     conn.close()
 
     socketio.emit("menu_changed", {"action":"deleted","item_id":item_id})
-
     return jsonify({"success": True})
 
 # ---------------------------
@@ -1754,28 +1747,20 @@ def delete_menu_item(item_id):
 @app.route("/manager/menu/<int:item_id>", methods=["PUT"])
 def manager_update_menu(item_id):
     try:
+        fields, values = [], []
+
         name = request.form.get("name")
         description = request.form.get("description")
         price = request.form.get("price")
         category = request.form.get("category")
 
-        fields, values = [], []
-
-        if name:
-            fields.append("name=%s")
-            values.append(name)
-        if description is not None:
-            fields.append("description=%s")
-            values.append(description)
-        if price:
-            fields.append("price=%s")
-            values.append(float(price))
-        if category:
-            fields.append("category=%s")
-            values.append(category)
+        if name: fields.append("name=%s"); values.append(name)
+        if description is not None: fields.append("description=%s"); values.append(description)
+        if price: fields.append("price=%s"); values.append(float(price))
+        if category: fields.append("category=%s"); values.append(category)
 
         file = request.files.get("image")
-        if file and file.filename:
+        if file and allowed_file(file.filename):
             ext = file.filename.rsplit(".",1)[1].lower()
             filename = f"{uuid.uuid4().hex}.{ext}"
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
@@ -1786,23 +1771,17 @@ def manager_update_menu(item_id):
             return jsonify({"error":"No data"}), 400
 
         values.append(item_id)
-
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(f"""
-            UPDATE menu_items SET {", ".join(fields)}
-            WHERE id=%s
-        """, values)
+        cur.execute(f"UPDATE menu_items SET {', '.join(fields)} WHERE id=%s", values)
         conn.commit()
         conn.close()
 
         socketio.emit("menu_changed", {"action":"updated","item_id":item_id})
-        log_event(f"Manager updated menu item #{item_id}")
-
-        return jsonify({"success":True}), 200
+        return jsonify({"success": True}), 200
 
     except Exception as e:
-        print("update error:", e)
+        print("manager_update_menu error:", e)
         return jsonify({"error":"Server error"}), 500
 
 #-----------------------------------
