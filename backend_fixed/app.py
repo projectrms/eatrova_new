@@ -62,11 +62,12 @@ def get_db_connection():
         cursor_factory=RealDictCursor
     )
 
+
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Users
+    # Users (customers)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -75,7 +76,7 @@ def init_db():
         )
     """)
 
-    # Chefs, Waiters, Managers
+    # Chefs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS chefs (
             id SERIAL PRIMARY KEY,
@@ -84,6 +85,8 @@ def init_db():
             password TEXT NOT NULL
         )
     """)
+
+    # Waiters
     cur.execute("""
         CREATE TABLE IF NOT EXISTS waiters (
             id SERIAL PRIMARY KEY,
@@ -92,6 +95,8 @@ def init_db():
             password TEXT NOT NULL
         )
     """)
+
+    # Managers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS managers (
             id SERIAL PRIMARY KEY,
@@ -110,9 +115,7 @@ def init_db():
             price NUMERIC(10,2) NOT NULL,
             image TEXT,
             category TEXT DEFAULT 'main',
-            is_available BOOLEAN DEFAULT TRUE,
-            is_deleted BOOLEAN DEFAULT FALSE,
-            deleted_at TIMESTAMP
+            available BOOLEAN DEFAULT TRUE
         )
     """)
 
@@ -1681,55 +1684,45 @@ def manager_get_menu():
 @app.route("/manager/menu", methods=["POST"])
 def manager_add_menu():
     try:
-        import uuid
-
         name = request.form.get("name")
         description = request.form.get("description", "")
         price = request.form.get("price")
         category = request.form.get("category", "main")
 
-        if not name or not price:
-            return jsonify({"error": "Name & price required"}), 400
+        if not name or price is None:
+            return jsonify({"error":"Name & price required"}), 400
 
         price = float(price)
-
-        # Handle image upload
         image_path = ""
-        if "image" in request.files:
-            file = request.files["image"]
-            if file and file.filename != "":
-                ext = file.filename.rsplit(".", 1)[1].lower()
-                filename = f"{uuid.uuid4().hex}.{ext}"
-                filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-                file.save(filepath)
-                image_path = f"/static/menu/{filename}"
 
-        # Insert into DB
+        file = request.files.get("image")
+        if file and allowed_file(file.filename):
+            ext = file.filename.rsplit(".",1)[1].lower()
+            filename = f"{uuid.uuid4().hex}.{ext}"
+            os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            image_path = f"/static/menu/{filename}"
+
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
         cur.execute("""
-            INSERT INTO menu_items (name, description, price, image, category, is_available)
+            INSERT INTO menu_items (name, description, price, image, category, available)
             VALUES (%s, %s, %s, %s, %s, TRUE)
             RETURNING id
         """, (name, description, price, image_path, category))
 
-        item_id = cur.fetchone()[0]
+        item_id = cur.fetchone()["id"]
         conn.commit()
-        cur.close()
         conn.close()
 
-        # Emit SocketIO event
-        try:
-            socketio.emit("menu_changed", {"action": "created", "item_id": item_id}, broadcast=True)
-        except Exception as e:
-            print("Socket emit failed:", e)
+        socketio.emit("menu_changed", {"action":"created","item_id":item_id})
 
-        return jsonify({"success": True, "id": item_id}), 201
+        return jsonify({"id": item_id}), 201
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        print("manager_add_menu error:", e)
+        return jsonify({"error":"Server error"}), 500
 
 # ---------------------------
 # Manager menu - DELETE
@@ -1861,6 +1854,8 @@ def restore_menu_item(item_id):
     socketio.emit("menu_changed", {"action":"restored","item_id":item_id})
 
     return jsonify({"success": True})
+
+
 
 # ----------------------------------------------
 # Inventory
