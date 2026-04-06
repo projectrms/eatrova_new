@@ -1786,7 +1786,7 @@ def manager_update_menu(item_id):
 
 #-----------------------------------
 # ✅ TOGGLE MENU ITEM AVAILABILITY
-#-----------------------------------
+#----------------------------------
 @app.route("/manager/menu/<int:item_id>/toggle", methods=["POST"])
 def toggle_menu_item(item_id):
     conn = get_db_connection()
