@@ -515,10 +515,9 @@ def get_menu():
                         price,
                         image,
                         COALESCE(category, 'main') AS category,
-                        COALESCE(is_available, TRUE) AS is_available
+                        COALESCE(available, TRUE) AS is_available
                     FROM menu_items
-                    WHERE is_available = TRUE
-                      AND is_deleted = FALSE
+                    WHERE available = TRUE
                     ORDER BY id DESC
                 """)
                 rows = cur.fetchall()
