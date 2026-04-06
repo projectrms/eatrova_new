@@ -49,8 +49,8 @@ TAX_CONFIG = {
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 # -------------------------
 # DB helpers
 # -------------------------
