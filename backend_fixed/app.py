@@ -670,7 +670,7 @@ def place_order():
     finally:
         if cur: cur.close()
         if conn: conn.close()
-        
+
 @app.route("/order/summary", methods=["POST"])
 def order_summary():
     data = request.json
@@ -1487,15 +1487,23 @@ def waiter_orders():
 
 @app.route("/orders", methods=["GET"])
 def get_all_orders():
-    conn = get_db_connection()
-    orders = conn.execute("SELECT * FROM orders ORDER BY created_at DESC").fetchall()
-    conn.close()
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()  # connect to DB
+        cur = conn.cursor(cursor_factory=RealDictCursor)  # create cursor
 
-    orders_list = []
-    for order in orders:
-        orders_list.append(dict(order))
+        cur.execute("SELECT * FROM orders ORDER BY created_at DESC")  # run query
+        orders = cur.fetchall()  # fetch all results
 
-    return jsonify(orders_list), 200
+        return jsonify({"success": True, "orders": orders})  # send JSON
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        if cur:
+            cur.close()  # close cursor
+        if conn:
+            conn.close()  # close connection
 
 # ------------------------------
 # SERVE ORDER (FOR WAITER)
