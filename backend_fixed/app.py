@@ -2,7 +2,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import sqlite3
+# import sqlite3
 from datetime import datetime
 from flask import send_file
 from openpyxl import Workbook
@@ -26,7 +26,7 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 # -------------------------
 # Config
 # -------------------------
-DB_PATH = os.path.join(os.getcwd(), "restaurant.db")
+# DB_PATH = os.path.join(os.getcwd(), "restaurant.db")
 
 app = Flask(__name__)
 
@@ -49,127 +49,118 @@ TAX_CONFIG = {
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+from dotenv import load_dotenv
+load_dotenv()
 # -------------------------
 # DB helpers
 # -------------------------
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_db_connection():
+    return psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor
+    )
 
 def init_db():
-    """
-    Create required tables if missing.
-    """
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Customers table
+    # Users (customers)
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS customers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            phone TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            email TEXT UNIQUE
         )
     """)
 
-    # Chef table
+    # Chefs
     cur.execute("""
         CREATE TABLE IF NOT EXISTS chefs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         )
     """)
 
-    # Waiter table
+    # Waiters
     cur.execute("""
         CREATE TABLE IF NOT EXISTS waiters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         )
     """)
 
-    # Manager table
+    # Managers
     cur.execute("""
         CREATE TABLE IF NOT EXISTS managers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         )
     """)
 
-    # Menu items (ensure category column exists)
+    # Menu items
     cur.execute("""
         CREATE TABLE IF NOT EXISTS menu_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT,
-            price REAL NOT NULL,
+            price NUMERIC(10,2) NOT NULL,
             image TEXT,
             category TEXT DEFAULT 'main',
-            available INTEGER DEFAULT 1
+            available BOOLEAN DEFAULT TRUE
         )
     """)
-    # In case the table existed from before and lacks 'category', try to add it (no-op if exists)
-    try:
-        cur.execute("ALTER TABLE menu_items ADD COLUMN category TEXT DEFAULT 'main'")
-        conn.commit()
-    except Exception:
-        # column probably exists already — ignore
-        pass
 
-    # Orders with paid column, and updated_at
+    # Tables
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tables (
+            id SERIAL PRIMARY KEY,
+            table_number INTEGER UNIQUE NOT NULL,
+            active BOOLEAN DEFAULT TRUE
+        )
+    """)
+
+    # Orders
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            table_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            table_id INTEGER NOT NULL REFERENCES tables(id),
             table_no INTEGER NOT NULL,
             customer_name TEXT DEFAULT '',
-            total REAL NOT NULL,
-            paid INTEGER DEFAULT 0,
+            total NUMERIC(10,2) NOT NULL,
+            paid BOOLEAN DEFAULT FALSE,
             status TEXT DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT,
-            cancel_reason TEXT,
-            FOREIGN KEY (user_id) REFERENCES customers(id),
-            FOREIGN KEY (table_id) REFERENCES tables(id)
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP,
+            cancel_reason TEXT
         )
     """)
 
     # Order items
     cur.execute("""
         CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            menu_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER NOT NULL REFERENCES orders(id),
+            menu_id INTEGER NOT NULL REFERENCES menu_items(id),
             quantity INTEGER NOT NULL,
-            price REAL NOT NULL,
-            FOREIGN KEY (order_id) REFERENCES orders(id),
-            FOREIGN KEY (menu_id) REFERENCES menu_items(id)
-        )
-    """)
-
-    # Tables (restaurant tables)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS tables (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            table_number INTEGER UNIQUE NOT NULL,
-            active INTEGER DEFAULT 1
+            price NUMERIC(10,2) NOT NULL
         )
     """)
 
     conn.commit()
+    cur.close()
     conn.close()
-
 
 def seed_menu_items():
     conn = get_db_connection()
@@ -182,7 +173,7 @@ def seed_menu_items():
             ("Pasta Alfredo", "Creamy white sauce pasta", 249, "https://i.imgur.com/XU2vUeG.png"),
             ("Cold Coffee", "Iced coffee with cream", 149, "https://i.imgur.com/EVp5pGf.png"),
         ]
-        cur.executemany("INSERT INTO menu_items (name, description, price, image) VALUES (?, ?, ?, ?)", items)
+        cur.executemany("INSERT INTO menu_items (name, description, price, image) VALUES (%s, %s, %s, %s)", items)
         conn.commit()
     conn.close()
 
@@ -199,7 +190,7 @@ def seed_tables():
     if count == 0:
         for i in range(1, 11):  # tables 1 to 10
             cur.execute(
-                "INSERT INTO tables (table_number, active) VALUES (?, 1)",
+                "INSERT INTO tables (table_number, active) VALUES (%s, 1)",
                 (i,)
             )
 
@@ -210,7 +201,7 @@ def get_unpaid_count(user_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM orders WHERE user_id = ? AND paid = 0", (user_id,))
+        cur.execute("SELECT COUNT(*) FROM orders WHERE user_id = %s AND paid = 0", (user_id,))
         row = cur.fetchone()
         conn.close()
         return int(row[0]) if row else 0
@@ -350,14 +341,18 @@ def add_menu_with_image():
 
         image_path = f"/static/menu/{filename}"
 
-        conn = sqlite3.connect("restaurant.db")
+        # ✅ PostgreSQL connection
+        conn = get_db_connection()
         cur = conn.cursor()
+
+        # ✅ FIXED query (%s instead of %s)
         cur.execute("""
             INSERT INTO menu_items (name, description, price, image, category)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
         """, (name, description, price, image_path, category))
 
         conn.commit()
+        cur.close()
         conn.close()
 
         return jsonify({"message": "Menu item added successfully"}), 201
@@ -384,12 +379,12 @@ def register_user():
     cur = conn.cursor()
 
     # Check duplicates
-    cur.execute("SELECT id FROM customers WHERE email = ?", (email,))
+    cur.execute("SELECT id FROM customers WHERE email = %s", (email,))
     if cur.fetchone():
         conn.close()
         return jsonify({"error": "Email already registered"}), 400
 
-    cur.execute("INSERT INTO customers (name, email, phone, password) VALUES (?, ?, ?, ?)",
+    cur.execute("INSERT INTO customers (name, email, phone, password) VALUES (%s, %s, %s, %s)",
                 (name, email, phone, password))
     conn.commit()
     conn.close()
@@ -410,7 +405,7 @@ def universal_login():
     cur = conn.cursor()
 
     # 1) check chefs
-    cur.execute("SELECT id, name, email, password, active FROM chefs WHERE email = ?", (email,))
+    cur.execute("SELECT id, name, email, password, active FROM chefs WHERE email = %s", (email,))
     chef = cur.fetchone()
     if chef:
         if chef["active"] == 0:
@@ -428,7 +423,7 @@ def universal_login():
             return jsonify({"error": "Wrong password"}), 401
    
    # 1) check waiters
-    cur.execute("SELECT id, name, email, password, active FROM waiters WHERE email = ?",(email,))
+    cur.execute("SELECT id, name, email, password, active FROM waiters WHERE email = %s",(email,))
     waiter = cur.fetchone()
     if waiter:
             if waiter["active"] == 0:
@@ -445,7 +440,7 @@ def universal_login():
                 return jsonify({"error": "Wrong password"}), 401
 
     # 2) check customers
-    cur.execute("SELECT id, name, email, password FROM customers WHERE email = ?", (email,))
+    cur.execute("SELECT id, name, email, password FROM customers WHERE email = %s", (email,))
     customer = cur.fetchone()
     if customer:
         if password == customer["password"]:
@@ -459,7 +454,7 @@ def universal_login():
             return jsonify({"error": "Wrong password"}), 401
 
     # ✅ check managers
-    cur.execute("SELECT id, name, email, password, active FROM managers WHERE email = ?", (email,))
+    cur.execute("SELECT id, name, email, password, active FROM managers WHERE email = %s", (email,))
     manager = cur.fetchone()
 
     if manager:
@@ -484,7 +479,7 @@ def universal_login():
             return jsonify({"error": "Wrong password"}), 401
     
     # ✅ check owners
-    cur.execute("SELECT id, name, email, password FROM owners WHERE email = ?", (email,))
+    cur.execute("SELECT id, name, email, password FROM owners WHERE email = %s", (email,))
     owner = cur.fetchone()
 
     if owner:
@@ -556,17 +551,17 @@ def place_order():
             return jsonify({"success": False, "error": "Invalid request"}), 400
 
         conn = get_db_connection()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
         # 1️⃣ Validate table
         cur.execute("""
             SELECT id, active FROM tables
-            WHERE table_number = ?
+            WHERE table_number = %s
         """, (table_no,))
         table = cur.fetchone()
 
         if not table:
+            cur.close()
             conn.close()
             return jsonify({"success": False, "error": "Invalid table"}), 400
 
@@ -575,36 +570,40 @@ def place_order():
         # 2️⃣ Active session
         cur.execute("""
             SELECT id FROM table_sessions
-            WHERE table_no = ? AND status = 'active'
+            WHERE table_no = %s AND status = 'active'
         """, (table_no,))
         session = cur.fetchone()
 
         if session:
             session_id = session["id"]
         else:
-            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cur.execute("""
-                INSERT INTO table_sessions (table_no, started_at, status)
-                VALUES (?, ?, 'active')
-            """, (table_no, started_at))
-            session_id = cur.lastrowid
+            started_at = datetime.now()
 
             cur.execute("""
-                UPDATE tables SET active = 0 WHERE id = ?
+                INSERT INTO table_sessions (table_no, started_at, status)
+                VALUES (%s, %s, 'active')
+                RETURNING id
+            """, (table_no, started_at))
+
+            session_id = cur.fetchone()["id"]
+
+            cur.execute("""
+                UPDATE tables SET active = 0 WHERE id = %s
             """, (table_id,))
 
         # 3️⃣ Calculate total
         total = sum(float(i["price"]) * int(i["quantity"]) for i in items)
-        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        created_at = datetime.now()
 
         # 4️⃣ Create order
         cur.execute("""
             INSERT INTO orders
             (user_id, table_id, table_no, session_id, total, paid, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, 'pending', ?)
+            VALUES (%s, %s, %s, %s, %s, 0, 'pending', %s)
+            RETURNING id
         """, (user_id, table_id, table_no, session_id, total, created_at))
 
-        order_id = cur.lastrowid
+        order_id = cur.fetchone()["id"]
 
         # 5️⃣ Snapshot items
         socket_items = []
@@ -613,8 +612,9 @@ def place_order():
             cur.execute("""
                 SELECT name, image, price
                 FROM menu_items
-                WHERE id = ?
+                WHERE id = %s
             """, (i["menu_id"],))
+
             menu = cur.fetchone()
 
             if menu:
@@ -629,7 +629,7 @@ def place_order():
             cur.execute("""
                 INSERT INTO order_items
                 (order_id, menu_id, item_name, item_image, quantity, price)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 order_id,
                 i["menu_id"],
@@ -646,6 +646,7 @@ def place_order():
             })
 
         conn.commit()
+        cur.close()
         conn.close()
 
         # 6️⃣ Realtime update
@@ -708,7 +709,7 @@ def get_customer_orders(user_id):
                 status,
                 created_at
             FROM orders
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY created_at DESC
         """, (user_id,))
 
@@ -722,7 +723,7 @@ def get_customer_orders(user_id):
                     price,
                     quantity
                 FROM order_items
-                WHERE order_id = ?
+                WHERE order_id = %s
             """, (o["id"],))
             items = [dict(i) for i in cur.fetchall()]
 
@@ -752,7 +753,7 @@ def get_order(order_id):
     cur.execute("""
         SELECT id, table_no, total, status, created_at
         FROM orders
-        WHERE id = ?
+        WHERE id = %s
     """, (order_id,))
     order = cur.fetchone()
 
@@ -767,7 +768,7 @@ def get_order(order_id):
             quantity,
             price
         FROM order_items
-        WHERE order_id = ?
+        WHERE order_id = %s
     """, (order_id,))
 
     items = [dict(row) for row in cur.fetchall()]
@@ -791,13 +792,13 @@ def get_tax_config():
 @app.route("/bills/session/<int:table_no>", methods=["GET"])
 def get_bill_by_table_session(table_no):
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     try:
+        # 🔹 Active session
         cur.execute("""
             SELECT id FROM table_sessions
-            WHERE table_no = ? AND status = 'active'
+            WHERE table_no = %s AND status = 'active'
         """, (table_no,))
         session = cur.fetchone()
 
@@ -813,19 +814,21 @@ def get_bill_by_table_session(table_no):
 
         session_id = session["id"]
 
+        # 🔹 Fetch items
         cur.execute("""
             SELECT
-            oi.item_name AS name,
-            SUM(oi.quantity) AS quantity,
-            oi.price,
-            SUM(oi.quantity * oi.price) AS subtotal
-        FROM orders o
-        JOIN order_items oi ON o.id = oi.order_id
-        WHERE o.session_id = ? AND o.paid = 0
-        GROUP BY oi.item_name
+                oi.item_name AS name,
+                SUM(oi.quantity) AS quantity,
+                oi.price,
+                SUM(oi.quantity * oi.price) AS subtotal
+            FROM orders o
+            JOIN order_items oi ON o.id = oi.order_id
+            WHERE o.session_id = %s AND o.paid = 0
+            GROUP BY oi.item_name, oi.price
         """, (session_id,))
 
-        items = [dict(r) for r in cur.fetchall()]
+        items = cur.fetchall()  # already dict (RealDictCursor)
+
         subtotal = sum(i["subtotal"] for i in items)
 
         gst = subtotal * TAX_CONFIG["gst"]
@@ -843,6 +846,7 @@ def get_bill_by_table_session(table_no):
         })
 
     finally:
+        cur.close()
         conn.close()
 
 @app.route("/pay/session/<int:table_no>", methods=["POST"])
@@ -856,7 +860,7 @@ def pay_session(table_no):
     # 🔎 Get active session
     cur.execute("""
         SELECT id FROM table_sessions
-        WHERE table_no = ? AND status = 'active'
+        WHERE table_no = %s AND status = 'active'
     """, (table_no,))
     session = cur.fetchone()
 
@@ -869,7 +873,7 @@ def pay_session(table_no):
     # 🔎 Get all unpaid orders in session
     cur.execute("""
         SELECT o.id FROM orders o
-        WHERE o.session_id = ? AND paid = 0
+        WHERE o.session_id = %s AND paid = 0
     """, (session_id,))
     unpaid_orders = [r["id"] for r in cur.fetchall()]
 
@@ -882,7 +886,7 @@ def pay_session(table_no):
         SELECT SUM(oi.quantity * oi.price) AS subtotal
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
-        WHERE o.session_id = ? AND o.paid = 0
+        WHERE o.session_id = %s AND o.paid = 0
     """, (session_id,))
     subtotal = cur.fetchone()["subtotal"] or 0
 
@@ -895,9 +899,9 @@ def pay_session(table_no):
         UPDATE orders
         SET paid = 1,
             status = 'completed',
-            payment_method = ?,
-            total = ?
-        WHERE session_id = ?
+            payment_method = %s,
+            total = %s
+        WHERE session_id = %s
     """, (method, round(total_final, 2), session_id))
 
     # 🔎 Close session
@@ -905,14 +909,14 @@ def pay_session(table_no):
         UPDATE table_sessions
         SET status = 'closed',
             ended_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = %s
     """, (session_id,))
 
     # 🔎 Free table
     cur.execute("""
         UPDATE tables
         SET active = 0
-        WHERE table_number = ?
+        WHERE table_number = %s
     """, (table_no,))
 
     conn.commit()
@@ -934,7 +938,7 @@ def pay_session(table_no):
 #         FROM table_sessions ts
 #         JOIN orders o ON ts.id = o.session_id
 #         JOIN order_items oi ON o.id = oi.order_id
-#         WHERE ts.table_no = ?
+#         WHERE ts.table_no = %s
 #           AND ts.status = 'closed'
 #           AND o.paid = 1
 #         GROUP BY ts.id
@@ -946,7 +950,6 @@ def pay_session(table_no):
 @app.route("/bills/history/user/<int:user_id>", methods=["GET"])
 def bill_history_by_user(user_id):
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     try:
@@ -959,7 +962,7 @@ def bill_history_by_user(user_id):
                 o.payment_method,
                 o.created_at
             FROM orders o
-            WHERE o.user_id = ?
+            WHERE o.user_id = %s
               AND o.paid = 1
             ORDER BY o.created_at DESC
         """, (user_id,))
@@ -975,10 +978,10 @@ def bill_history_by_user(user_id):
                     price,
                     (quantity * price) AS subtotal
                 FROM order_items
-                WHERE order_id = ?
+                WHERE order_id = %s
             """, (o["order_id"],))
 
-            items = [dict(row) for row in cur.fetchall()]
+            items = cur.fetchall()  # already dict
 
             result.append({
                 "order_id": o["order_id"],
@@ -997,6 +1000,7 @@ def bill_history_by_user(user_id):
         return jsonify({"error": "Server error"}), 500
 
     finally:
+        cur.close()
         conn.close()
         
 from datetime import datetime
@@ -1011,7 +1015,7 @@ def get_invoice(session_id):
         cur.execute("""
             SELECT o.id, o.payment_method, o.created_at
             FROM orders o
-            WHERE o.session_id = ?
+            WHERE o.session_id = %s
         """, (session_id,))
         order = cur.fetchone()
 
@@ -1027,7 +1031,7 @@ def get_invoice(session_id):
                 (oi.quantity * oi.price) AS subtotal
             FROM order_items oi
             JOIN orders o ON oi.order_id = o.id
-            WHERE o.session_id = ?
+            WHERE o.session_id = %s
         """, (session_id,))
 
         items = [dict(row) for row in cur.fetchall()]
@@ -1059,7 +1063,6 @@ def get_invoice(session_id):
 @app.route("/orders/unpaid/<int:table_no>")
 def get_unpaid_orders(table_no):
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     try:
@@ -1067,7 +1070,7 @@ def get_unpaid_orders(table_no):
         cur.execute("""
             SELECT id
             FROM table_sessions
-            WHERE table_no = ? AND status = 'active'
+            WHERE table_no = %s AND status = 'active'
         """, (table_no,))
         session = cur.fetchone()
 
@@ -1080,17 +1083,18 @@ def get_unpaid_orders(table_no):
         cur.execute("""
             SELECT o.id, o.created_at, o.status, o.total
             FROM orders o
-            WHERE o.session_id = ? AND o.paid = 0
+            WHERE o.session_id = %s AND o.paid = 0
             ORDER BY o.created_at DESC
         """, (session_id,))
 
-        orders = [dict(row) for row in cur.fetchall()]
+        orders = cur.fetchall()  # ✅ already dict
         return jsonify(orders), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     finally:
+        cur.close()
         conn.close()
 
 #----------------------------
@@ -1115,7 +1119,7 @@ def create_checkout_session():
                 },
                 "quantity": 1,
             }],
-            success_url="http://localhost:5173/payment-success?session_id={CHECKOUT_SESSION_ID}",
+            success_url="http://localhost:5173/payment-success%ssession_id={CHECKOUT_SESSION_ID}",
             cancel_url="http://localhost:5173/payment-cancel",
             metadata={"table_no": table_no}
         )
@@ -1143,7 +1147,7 @@ def verify_payment():
         cur.execute("""
             INSERT INTO payments 
             (table_no, stripe_session_id, stripe_payment_intent, amount, method, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (
             table_no,
             session.id,
@@ -1157,7 +1161,7 @@ def verify_payment():
         cur.execute("""
             UPDATE table_sessions
             SET status='paid'
-            WHERE table_no=? AND status='active'
+            WHERE table_no=%s AND status='active'
         """, (table_no,))
 
         conn.commit()
@@ -1204,15 +1208,15 @@ def update_order_status(order_id):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT id FROM orders WHERE id = ?", (order_id,))
+        cur.execute("SELECT id FROM orders WHERE id = %s", (order_id,))
         if not cur.fetchone():
             conn.close()
             return jsonify({"error": "Order not found"}), 404
 
         cur.execute("""
             UPDATE orders
-            SET status = ?, updated_at = ?
-            WHERE id = ?
+            SET status = %s, updated_at = %s
+            WHERE id = %s
         """, (
             new_status,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1244,7 +1248,7 @@ def get_order_details(order_id):
         cur.execute("""
             SELECT id, table_no, total, status
             FROM orders
-            WHERE id = ?
+            WHERE id = %s
         """, (order_id,))
         order = cur.fetchone()
 
@@ -1259,7 +1263,7 @@ def get_order_details(order_id):
                 quantity,
                 price
             FROM order_items
-            WHERE order_id = ?
+            WHERE order_id = %s
         """, (order_id,))
 
         items = [dict(row) for row in cur.fetchall()]
@@ -1289,7 +1293,7 @@ def cancel_order(order_id):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT user_id FROM orders WHERE id = ?", (order_id,))
+        cur.execute("SELECT user_id FROM orders WHERE id = %s", (order_id,))
         row = cur.fetchone()
 
         if not row:
@@ -1301,9 +1305,9 @@ def cancel_order(order_id):
         cur.execute("""
             UPDATE orders
             SET status = 'cancelled',
-                cancel_reason = ?,
-                updated_at = ?
-            WHERE id = ?
+                cancel_reason = %s,
+                updated_at = %s
+            WHERE id = %s
         """, (reason, timestamp, order_id))
 
         conn.commit()
@@ -1349,15 +1353,15 @@ def update_item_status(order_id, item_id):
         if new_status == "preparing":
             cur.execute("""
                 UPDATE order_items 
-                SET started_at = ? 
-                WHERE id = ? AND order_id = ?
+                SET started_at = %s 
+                WHERE id = %s AND order_id = %s
             """, (ts, item_id, order_id))
 
         if new_status == "ready":
             cur.execute("""
                 UPDATE order_items 
-                SET finished_at = ? 
-                WHERE id = ? AND order_id = ?
+                SET finished_at = %s 
+                WHERE id = %s AND order_id = %s
             """, (ts, item_id, order_id))
 
         conn.commit()
@@ -1388,90 +1392,100 @@ def update_item_status(order_id, item_id):
 @app.route("/chef/orders", methods=["GET"])
 def chef_orders():
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT
-            o.id AS order_id,
-            o.table_no,
-            o.total,
-            o.status,
-            o.created_at,
-            o.cancel_reason,
-            oi.item_name,
-            oi.quantity
-        FROM orders o
-        LEFT JOIN order_items oi ON o.id = oi.order_id
-        WHERE o.status IN ('pending','preparing','ready','cancelled')
-        ORDER BY o.created_at DESC
-    """)
+    try:
+        cur.execute("""
+            SELECT
+                o.id AS order_id,
+                o.table_no,
+                o.total,
+                o.status,
+                o.created_at,
+                o.cancel_reason,
+                oi.item_name,
+                oi.quantity
+            FROM orders o
+            LEFT JOIN order_items oi ON o.id = oi.order_id
+            WHERE o.status IN ('pending','preparing','ready','cancelled')
+            ORDER BY o.created_at DESC
+        """)
 
-    rows = cur.fetchall()
-    conn.close()
+        rows = cur.fetchall()
 
-    orders = {}
+        orders = {}
 
-    for r in rows:
-        oid = r["order_id"]
-        if oid not in orders:
-            orders[oid] = {
-                "order_id": oid,
-                "table_no": r["table_no"],
-                "total": r["total"],
-                "status": r["status"],
-                "created_at": r["created_at"],
-                "cancel_reason": r["cancel_reason"] or "",
-                "items": []
-            }
+        for r in rows:
+            oid = r["order_id"]
 
-        if r["item_name"]:
-            orders[oid]["items"].append({
-                "name": r["item_name"],
-                "quantity": r["quantity"]
-            })
+            if oid not in orders:
+                orders[oid] = {
+                    "order_id": oid,
+                    "table_no": r["table_no"],
+                    "total": r["total"],
+                    "status": r["status"],
+                    "created_at": r["created_at"],
+                    "cancel_reason": r["cancel_reason"] or "",
+                    "items": []
+                }
 
-    return jsonify(list(orders.values())), 200
+            if r["item_name"]:
+                orders[oid]["items"].append({
+                    "name": r["item_name"],
+                    "quantity": r["quantity"]
+                })
+
+        return jsonify(list(orders.values())), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cur.close()
+        conn.close()
     
 @app.route("/waiter/orders", methods=["GET"])
 def waiter_orders():
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT id, table_no, total, status, created_at
-        FROM orders
-        WHERE status IN ('ready','completed','cancelled')
-        ORDER BY created_at DESC
-    """)
-    orders_rows = cur.fetchall()
-
-    orders = []
-
-    for o in orders_rows:
+    try:
         cur.execute("""
-            SELECT item_name AS name, quantity
-            FROM order_items
-            WHERE order_id = ?
-        """, (o["id"],))
+            SELECT id, table_no, total, status, created_at
+            FROM orders
+            WHERE status IN ('ready','completed','cancelled')
+            ORDER BY created_at DESC
+        """)
+        orders_rows = cur.fetchall()
 
-        items = [
-            {"name": r["name"], "quantity": r["quantity"]}
-            for r in cur.fetchall()
-        ]
+        orders = []
 
-        orders.append({
-            "order_id": o["id"],
-            "table_no": o["table_no"],
-            "total": o["total"],
-            "status": o["status"],
-            "created_at": o["created_at"],
-            "items": items
-        })
+        for o in orders_rows:
+            cur.execute("""
+                SELECT item_name AS name, quantity
+                FROM order_items
+                WHERE order_id = %s
+            """, (o["id"],))
 
-    conn.close()
-    return jsonify(orders), 200
+            items = cur.fetchall()  # ✅ already dict
+
+            orders.append({
+                "order_id": o["id"],
+                "table_no": o["table_no"],
+                "total": o["total"],
+                "status": o["status"],
+                "created_at": o["created_at"],
+                "items": items
+            })
+
+        return jsonify(orders), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route("/orders", methods=["GET"])
 def get_all_orders():
@@ -1492,23 +1506,24 @@ def get_all_orders():
 def serve_order(order_id):
     try:
         conn = get_db_connection()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
         # 1️⃣ Check order exists
         cur.execute("""
             SELECT status, table_no, session_id
             FROM orders
-            WHERE id = ?
+            WHERE id = %s
         """, (order_id,))
         order = cur.fetchone()
 
         if not order:
+            cur.close()
             conn.close()
             return jsonify({"success": False, "error": "Order not found"}), 404
 
         # 2️⃣ Only READY orders can be served
         if order["status"] != "ready":
+            cur.close()
             conn.close()
             return jsonify({
                 "success": False,
@@ -1519,25 +1534,28 @@ def serve_order(order_id):
         cur.execute("""
             UPDATE orders
             SET status = 'completed',
-                updated_at = ?
-            WHERE id = ?
+                updated_at = %s
+            WHERE id = %s
         """, (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now(),
             order_id
         ))
 
-        # 4️⃣ Close table session (IMPORTANT)
+        # 4️⃣ Close table session
         if order["session_id"]:
             cur.execute("""
                 UPDATE table_sessions
-                SET status = 'closed', ended_at = ?
-                WHERE id = ?
+                SET status = 'closed', ended_at = %s
+                WHERE id = %s
             """, (
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                datetime.now(),
                 order["session_id"]
             ))
 
         conn.commit()
+
+        # ✅ Close properly
+        cur.close()
         conn.close()
 
         # 5️⃣ Notify all dashboards
@@ -1552,7 +1570,7 @@ def serve_order(order_id):
             "success": False,
             "error": "Server error"
         }), 500
-
+    
 @app.route("/manager/orders", methods=["GET"])
 def manager_all_orders():
     try:
@@ -1587,7 +1605,7 @@ def manager_all_orders():
                     price,
                     (quantity * price) AS subtotal
                 FROM order_items
-                WHERE order_id = ?
+                WHERE order_id = %s
             """, (o["id"],))
 
             items = [dict(i) for i in cur.fetchall()]
@@ -1680,7 +1698,7 @@ def manager_add_menu():
         cur.execute("""
             INSERT INTO menu_items
             (name, description, price, image, category, is_available, is_deleted)
-            VALUES (?, ?, ?, ?, ?, 1, 0)
+            VALUES (%s, %s, %s, %s, %s, 1, 0)
         """, (name, description, price, image_path, category))
 
         conn.commit()
@@ -1708,7 +1726,7 @@ def delete_menu_item(item_id):
         SET is_deleted = 1,
             is_available = 0,
             deleted_at = datetime('now')
-        WHERE id = ?
+        WHERE id = %s
     """, (item_id,))
 
     conn.commit()
@@ -1732,16 +1750,16 @@ def manager_update_menu(item_id):
         fields, values = [], []
 
         if name:
-            fields.append("name=?")
+            fields.append("name=%s")
             values.append(name)
         if description is not None:
-            fields.append("description=?")
+            fields.append("description=%s")
             values.append(description)
         if price:
-            fields.append("price=?")
+            fields.append("price=%s")
             values.append(float(price))
         if category:
-            fields.append("category=?")
+            fields.append("category=%s")
             values.append(category)
 
         file = request.files.get("image")
@@ -1749,7 +1767,7 @@ def manager_update_menu(item_id):
             ext = file.filename.rsplit(".",1)[1].lower()
             filename = f"{uuid.uuid4().hex}.{ext}"
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-            fields.append("image=?")
+            fields.append("image=%s")
             values.append(f"/static/menu/{filename}")
 
         if not fields:
@@ -1761,7 +1779,7 @@ def manager_update_menu(item_id):
         cur = conn.cursor()
         cur.execute(f"""
             UPDATE menu_items SET {", ".join(fields)}
-            WHERE id=?
+            WHERE id=%s
         """, values)
         conn.commit()
         conn.close()
@@ -1789,7 +1807,7 @@ def toggle_menu_item(item_id):
             WHEN is_available = 1 THEN 0
             ELSE 1
         END
-        WHERE id = ? AND is_deleted = 0
+        WHERE id = %s AND is_deleted = 0
     """, (item_id,))
 
     conn.commit()
@@ -1797,7 +1815,7 @@ def toggle_menu_item(item_id):
     cur.execute("""
         SELECT is_available
         FROM menu_items
-        WHERE id = ?
+        WHERE id = %s
     """, (item_id,))
     row = cur.fetchone()
 
@@ -1834,7 +1852,7 @@ def restore_menu_item(item_id):
         SET is_deleted = 0,
             is_available = 1,
             deleted_at = NULL
-        WHERE id = ?
+        WHERE id = %s
     """, (item_id,))
 
     conn.commit()
@@ -1900,7 +1918,7 @@ def create_inventory_item():
 
     cur.execute("""
         INSERT INTO inventory (name, current_stock, min_stock, unit)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
     """, (
         data["name"],
         data.get("current_stock", 0),
@@ -1924,8 +1942,8 @@ def update_inventory_stock(item_id):
 
     cur.execute("""
         UPDATE inventory
-        SET current_stock = MAX(current_stock + ?, 0)
-        WHERE id = ?
+        SET current_stock = MAX(current_stock + %s, 0)
+        WHERE id = %s
     """, (data["change"], item_id))
 
     conn.commit()
@@ -1944,8 +1962,8 @@ def edit_inventory_item(item_id):
 
     cur.execute("""
         UPDATE inventory
-        SET name = ?, min_stock = ?, unit = ?
-        WHERE id = ?
+        SET name = %s, min_stock = %s, unit = %s
+        WHERE id = %s
     """, (
         data["name"],
         data["min_stock"],
@@ -1965,7 +1983,7 @@ def delete_inventory_item(item_id):
     conn = get_db_connection()
     cur = conn.cursor()
 
-    cur.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
+    cur.execute("DELETE FROM inventory WHERE id = %s", (item_id,))
     conn.commit()
     conn.close()
 
@@ -2038,7 +2056,7 @@ def owner_create_staff(role):
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(f"INSERT INTO {role} (name, email, password, active) VALUES (?, ?, ?, 1)", (name, email, password))
+        cur.execute(f"INSERT INTO {role} (name, email, password, active) VALUES (%s, %s, %s, 1)", (name, email, password))
         conn.commit()
         new_id = cur.lastrowid
         conn.close()
@@ -2061,14 +2079,14 @@ def owner_toggle_staff(role, user_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(f"SELECT active FROM {role} WHERE id = ?", (user_id,))
+        cur.execute(f"SELECT active FROM {role} WHERE id = %s", (user_id,))
         row = cur.fetchone()
         if not row:
             conn.close()
             return jsonify({"error": "User not found"}), 404
         current = int(row["active"]) if row["active"] is not None else 1
         new_status = 0 if current == 1 else 1
-        cur.execute(f"UPDATE {role} SET active = ? WHERE id = ?", (new_status, user_id))
+        cur.execute(f"UPDATE {role} SET active = %s WHERE id = %s", (new_status, user_id))
         conn.commit()
         conn.close()
         try:
@@ -2095,7 +2113,7 @@ def owner_toggle_restaurant():
         r = cur.fetchone()
         current = int(r["is_open"]) if r and r["is_open"] is not None else 1
         new_status = 0 if current == 1 else 1
-        cur.execute("UPDATE restaurant_status SET is_open = ? WHERE id = 1", (new_status,))
+        cur.execute("UPDATE restaurant_status SET is_open = %s WHERE id = 1", (new_status,))
         conn.commit()
         conn.close()
         try:
@@ -2131,7 +2149,7 @@ def owner_delete_menu(item_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM menu_items WHERE id = ?", (item_id,))
+        cur.execute("DELETE FROM menu_items WHERE id = %s", (item_id,))
         conn.commit()
         conn.close()
         try:
@@ -2150,14 +2168,14 @@ def owner_toggle_menu(item_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT available FROM menu_items WHERE id = ?", (item_id,))
+        cur.execute("SELECT available FROM menu_items WHERE id = %s", (item_id,))
         row = cur.fetchone()
         if not row:
             conn.close()
             return jsonify({"error": "Item not found"}), 404
         current = int(row["available"]) if row["available"] is not None else 1
         new_status = 0 if current == 1 else 1
-        cur.execute("UPDATE menu_items SET available = ? WHERE id = ?", (new_status, item_id))
+        cur.execute("UPDATE menu_items SET available = %s WHERE id = %s", (new_status, item_id))
         conn.commit()
         conn.close()
         try:
@@ -2186,7 +2204,7 @@ def owner_block_order(order_id):
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT user_id, status FROM orders WHERE id = ?", (order_id,))
+        cur.execute("SELECT user_id, status FROM orders WHERE id = %s", (order_id,))
         row = cur.fetchone()
         if not row:
             conn.close()
@@ -2196,7 +2214,7 @@ def owner_block_order(order_id):
             return jsonify({"error": "Completed order can't be blocked"}), 400
 
         user_id = row.get("user_id")
-        cur.execute("UPDATE orders SET status = 'cancelled', cancel_reason = ?, updated_at = ? WHERE id = ?", (reason, ts, order_id))
+        cur.execute("UPDATE orders SET status = 'cancelled', cancel_reason = %s, updated_at = %s WHERE id = %s", (reason, ts, order_id))
         conn.commit()
         conn.close()
 
@@ -2969,7 +2987,7 @@ def owner_get_order_items(order_id):
                 quantity,
                 price
             FROM order_items
-            WHERE order_id = ?
+            WHERE order_id = %s
         """, (order_id,))
 
         items = [dict(r) for r in cur.fetchall()]
@@ -2991,7 +3009,7 @@ def rows_to_list(rows):
 # 1) Sales: flexible range (daily, weekly, monthly)
 @app.route("/owner/sales", methods=["GET"])
 def owner_sales():
-    # query params: ?range=daily|weekly|monthly|custom&start=YYYY-MM-DD&end=YYYY-MM-DD
+    # query params: %srange=daily|weekly|monthly|custom&start=YYYY-MM-DD&end=YYYY-MM-DD
     rng = request.args.get("range","daily")
     start = request.args.get("start")
     end = request.args.get("end")
@@ -3028,7 +3046,7 @@ def owner_sales():
             cur.execute("""
               SELECT DATE(created_at) as day, COALESCE(SUM(total),0) as total
               FROM orders
-              WHERE DATE(created_at) BETWEEN ? AND ?
+              WHERE DATE(created_at) BETWEEN %s AND %s
               GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC
             """, (start, end))
             rows = cur.fetchall()
@@ -3113,7 +3131,7 @@ def owner_all_orders():
         cur.execute("SELECT id, user_id, table_no, total, paid, status, created_at FROM orders ORDER BY created_at DESC")
         orders = [dict(r) for r in cur.fetchall()]
         for o in orders:
-            cur.execute("SELECT oi.menu_id, oi.quantity, oi.price, mi.name as item_name FROM order_items oi LEFT JOIN menu_items mi ON mi.id = oi.menu_id WHERE oi.order_id = ?", (o["id"],))
+            cur.execute("SELECT oi.menu_id, oi.quantity, oi.price, mi.name as item_name FROM order_items oi LEFT JOIN menu_items mi ON mi.id = oi.menu_id WHERE oi.order_id = %s", (o["id"],))
             items = [dict(x) for x in cur.fetchall()]
             o["items"] = items
         conn.close()
@@ -3213,57 +3231,60 @@ def owner_revenue_analytics():
 def today_report():
 
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT 
-            o.id,
-            c.name AS customer_name,
+    try:
+        cur.execute("""
+            SELECT 
+                o.id,
+                c.name AS customer_name,
 
-            GROUP_CONCAT(
-                m.name || ' (' || oi.quantity || ')', ', '
-            ) AS items,
+                STRING_AGG(
+                    m.name || ' (' || oi.quantity || ')', ', '
+                ) AS items,
 
-            o.total AS amount,
-            o.paid,
-            o.created_at
+                o.total AS amount,
+                o.paid,
+                o.created_at
 
-        FROM orders o
+            FROM orders o
 
-        LEFT JOIN customers c
-        ON o.user_id = c.id
+            LEFT JOIN customers c
+            ON o.user_id = c.id
 
-        JOIN order_items oi
-        ON o.id = oi.order_id
+            JOIN order_items oi
+            ON o.id = oi.order_id
 
-        JOIN menu_items m
-        ON oi.menu_id = m.id
+            JOIN menu_items m
+            ON oi.menu_id = m.id
 
-        WHERE DATE(o.created_at) = DATE('now')
+            WHERE DATE(o.created_at) = CURRENT_DATE
 
-        GROUP BY o.id
+            GROUP BY o.id, c.name, o.total, o.paid, o.created_at
 
-        ORDER BY o.created_at DESC
-    """)
+            ORDER BY o.created_at DESC
+        """)
 
-    rows = cur.fetchall()
+        rows = cur.fetchall()
 
-    orders = []
+        orders = []
 
-    for r in rows:
-        orders.append({
-            "id": r["id"],
-            "customer": r["customer_name"] or "Walk-in",
-            "items": r["items"],
-            "amount": float(r["amount"] or 0),
-            "paid": "Paid" if r["paid"] else "Unpaid",
-            "time": r["created_at"]
-        })
+        for r in rows:
+            orders.append({
+                "id": r["id"],
+                "customer": r["customer_name"] or "Walk-in",
+                "items": r["items"],
+                "amount": float(r["amount"] or 0),
+                "paid": "Paid" if r["paid"] else "Unpaid",
+                "time": r["created_at"]
+            })
 
-    conn.close()
+        return jsonify(orders)
 
-    return jsonify(orders)
+    finally:
+        cur.close()
+        conn.close()
+        
 # -----------------------------------------------------------------------------------------
 # Analytics
 #-------------------------------------------------------------------------------------------
@@ -3279,7 +3300,7 @@ def order_analytics_today():
     cur.execute("""
         SELECT COUNT(*) 
         FROM orders 
-        WHERE DATE(created_at) = DATE(?)
+        WHERE DATE(created_at) = DATE(%s)
     """, (today,))
     total_orders = cur.fetchone()[0]
 
@@ -3288,7 +3309,7 @@ def order_analytics_today():
         SELECT SUM(total)
         FROM orders
         WHERE paid = 1
-        AND DATE(created_at) = DATE(?)
+        AND DATE(created_at) = DATE(%s)
     """, (today,))
     revenue = cur.fetchone()[0] or 0
 
@@ -3324,15 +3345,15 @@ def filter_orders():
     params = []
 
     if status:
-        base += " AND status = ?"
+        base += " AND status = %s"
         params.append(status)
 
     if table:
-        base += " AND table_no = ?"
+        base += " AND table_no = %s"
         params.append(table)
 
     if customer:
-        base += " AND user_id = ?"
+        base += " AND user_id = %s"
         params.append(customer)
 
     # --- Date filter logic ---
@@ -3346,7 +3367,7 @@ def filter_orders():
         base += " AND DATE(created_at) >= DATE('now','-7 day','localtime')"
 
     if order_id:
-        base += " AND id = ?"
+        base += " AND id = %s"
         params.append(order_id)
 
     cur.execute(base, params)
@@ -3419,7 +3440,7 @@ def table_occupancy():
         cur.execute("""
             SELECT id, status, paid 
             FROM orders 
-            WHERE table_no = ? 
+            WHERE table_no = %s 
             ORDER BY id DESC LIMIT 1
         """, (t,))
         order = cur.fetchone()
@@ -3542,7 +3563,7 @@ def staff_attendance():
 #     conn = get_db_connection()
 #     conn.execute("""
 #         INSERT INTO inventory (item_name, sku, quantity, unit, low_threshold, note)
-#         VALUES (?, ?, ?, ?, ?, ?)
+#         VALUES (%s, %s, %s, %s, %s, %s)
 #     """, (name, sku, qty, unit, threshold, note))
 
 #     conn.commit()
@@ -3558,8 +3579,8 @@ def staff_attendance():
 #     conn = get_db_connection()
 #     conn.execute("""
 #         UPDATE inventory 
-#         SET quantity = ?, updated_at = datetime('now'), note = ?
-#         WHERE id = ?
+#         SET quantity = %s, updated_at = datetime('now'), note = %s
+#         WHERE id = %s
 #     """, (qty, note, item_id))
 
 #     conn.commit()
@@ -3569,7 +3590,7 @@ def staff_attendance():
 # @app.route("/inventory/<int:item_id>", methods=["DELETE"])
 # def delete_inventory(item_id):
 #     conn = get_db_connection()
-#     conn.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
+#     conn.execute("DELETE FROM inventory WHERE id = %s", (item_id,))
 #     conn.commit()
 #     conn.close()
 #     return jsonify({"message": "Item deleted"})
@@ -3609,7 +3630,7 @@ def add_expense():
 
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO expenses (title, category, amount, note) VALUES (?, ?, ?, ?)",
+        "INSERT INTO expenses (title, category, amount, note) VALUES (%s, %s, %s, %s)",
         (title, category, amount, note)
     )
     conn.commit()
@@ -3621,7 +3642,7 @@ def add_expense():
 @app.route("/expenses/delete/<int:expense_id>", methods=["DELETE"])
 def delete_expense(expense_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
+    conn.execute("DELETE FROM expenses WHERE id=%s", (expense_id,))
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "Expense deleted"})
@@ -3803,34 +3824,37 @@ def customer_full_analytics():
 # -----------------------------
 def get_purchase_history():
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
-    c.execute("""
-        SELECT 
-            COALESCE(c.name, 'Guest Customer') AS customer_name,
-            SUM(o.total) AS total_spent,              -- FIXED HERE
-            COUNT(o.id) AS visits
-        FROM orders o
-        LEFT JOIN customers c ON o.user_id = c.id
-        WHERE o.paid = 1
-        GROUP BY c.name
-        ORDER BY total_spent DESC
-    """)
+    try:
+        c.execute("""
+            SELECT 
+                COALESCE(c.name, 'Guest Customer') AS customer_name,
+                SUM(o.total) AS total_spent,
+                COUNT(o.id) AS visits
+            FROM orders o
+            LEFT JOIN customers c ON o.user_id = c.id
+            WHERE o.paid = 1
+            GROUP BY c.id, c.name
+            ORDER BY total_spent DESC
+        """)
 
-    rows = c.fetchall()
-    conn.close()
+        rows = c.fetchall()
 
-    history = [
-        {
-            "customer_name": row["customer_name"],
-            "total_spent": float(row["total_spent"] or 0),
-            "visits": int(row["visits"] or 0)
-        }
-        for row in rows
-    ]
+        history = [
+            {
+                "customer_name": row["customer_name"],
+                "total_spent": float(row["total_spent"] or 0),
+                "visits": int(row["visits"] or 0)
+            }
+            for row in rows
+        ]
 
-    return history
+        return history
+
+    finally:
+        c.close()
+        conn.close()
 
 
 @app.route("/owner/purchase-history")
@@ -3857,10 +3881,18 @@ def analytics_purchase_history():
 # Start server
 # ---------------------------
 if __name__ == "__main__":
-    # ensure DB exists and seeded
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    import os
+
+    # ✅ Initialize DB (PostgreSQL)
     init_db()
-    seed_menu_items()
-    seed_tables()
-    # run SocketIO server
-    socketio.run(app, host="127.0.0.1", port=5000, debug=True)
+
+    # ✅ Optional: run seeds only once (recommended)
+    if os.getenv("RUN_SEED", "false") == "true":
+        seed_menu_items()
+        seed_tables()
+
+    # ✅ Get dynamic port from Render
+    port = int(os.environ.get("PORT", 5000))
+
+    # ✅ Run server (IMPORTANT CHANGE)
+    socketio.run(app, host="0.0.0.0", port=port)
