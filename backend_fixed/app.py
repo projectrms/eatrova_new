@@ -1681,45 +1681,55 @@ def manager_get_menu():
 @app.route("/manager/menu", methods=["POST"])
 def manager_add_menu():
     try:
+        import uuid
+
         name = request.form.get("name")
         description = request.form.get("description", "")
         price = request.form.get("price")
         category = request.form.get("category", "main")
 
-        if not name or price is None:
-            return jsonify({"error":"Name & price required"}), 400
+        if not name or not price:
+            return jsonify({"error": "Name & price required"}), 400
 
         price = float(price)
+
+        # Handle image upload
         image_path = ""
+        if "image" in request.files:
+            file = request.files["image"]
+            if file and file.filename != "":
+                ext = file.filename.rsplit(".", 1)[1].lower()
+                filename = f"{uuid.uuid4().hex}.{ext}"
+                filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+                file.save(filepath)
+                image_path = f"/static/menu/{filename}"
 
-        file = request.files.get("image")
-        if file and allowed_file(file.filename):
-            ext = file.filename.rsplit(".",1)[1].lower()
-            filename = f"{uuid.uuid4().hex}.{ext}"
-            os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-            image_path = f"/static/menu/{filename}"
-
+        # Insert into DB
         conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
+        cur = conn.cursor()
         cur.execute("""
-            INSERT INTO menu_items (name, description, price, image, category, available)
+            INSERT INTO menu_items (name, description, price, image, category, is_available)
             VALUES (%s, %s, %s, %s, %s, TRUE)
             RETURNING id
         """, (name, description, price, image_path, category))
 
-        item_id = cur.fetchone()["id"]
+        item_id = cur.fetchone()[0]
         conn.commit()
+        cur.close()
         conn.close()
 
-        socketio.emit("menu_changed", {"action":"created","item_id":item_id})
+        # Emit SocketIO event
+        try:
+            socketio.emit("menu_changed", {"action": "created", "item_id": item_id}, broadcast=True)
+        except Exception as e:
+            print("Socket emit failed:", e)
 
-        return jsonify({"id": item_id}), 201
+        return jsonify({"success": True, "id": item_id}), 201
 
     except Exception as e:
-        print("manager_add_menu error:", e)
-        return jsonify({"error":"Server error"}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 # ---------------------------
 # Manager menu - DELETE
