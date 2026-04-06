@@ -58,10 +58,7 @@ import os
 
 def get_db_connection():
     return psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),          # e.g., "eatrova"
-        user=os.getenv("DB_USER"),            # e.g., "eatrova_user"
-        password=os.getenv("DB_PASSWORD"),    # your DB password
-        host=os.getenv("DB_HOST"),            # e.g., "dpg-d799q6ua2pns73938pe0-a.oregon-postgres.render.com"
+        os.getenv("DATABASE_URL"),
         cursor_factory=RealDictCursor
     )
 
